@@ -1,0 +1,18 @@
+get topic
+python3 get_structure.py --out output/topic_structure.json
+python3 get_structure.py --out output/topic_structure.json --limit 1,2,2
+
+full crawl:
+python3 batch.py --structure_file output/topic_structure.json --group_index 0 --group_count 1 --output output
+
+validation command:
+python3 validate_topic_structure.py
+python3 topic_structure_count.py
+
+python3 crawl.py --url "" --out output/Category
+python3 crawl.py --url "" --out output/SubCategory
+python3 crawl.py --url "" --out output/Part
+
+Category : ""
+SubCategory : ""
+Part : ""
