@@ -55,7 +55,7 @@ SITE_CONFIG = {
     },
 
     "part": {
-        "main_selector": ".product-details",
+        "main_selector": ".prd-detail-top",
         "markdown": [".product-details", ".marketing-area > div"],
         "images": [".product-image-countainer .product-image-container img"],
         "documentation": ["#accordion a[href]"],
@@ -284,7 +284,8 @@ class Product:
         pdf_links = []
         pdf_names = []
 
-        for a in soup.select(SITE_CONFIG["part"]["products"]["pdf_link"]):
+        pdf_selector = SITE_CONFIG["part"]["products"]["pdf_link"]
+        for a in (soup.select(pdf_selector) if pdf_selector else []):
             href = a.get("href")
             if not href:
                 continue

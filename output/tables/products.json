@@ -1,0 +1,24 @@
+{
+    "메인으로": {
+        "Product": "메인으로",
+        "name": null,
+        "Pricing": null,
+        "image_url": null,
+        "product_page_link": "https://www.keccorp.com/en/product/product_view.asp?idx=4222",
+        "Ordering_Information": {
+            "Part number": "KIB2040QN33-EL/HU",
+            "Status": "New",
+            "Compliance": "Yes",
+            "Package": "Yes",
+            "Packing Type": "Yes",
+            "Packing Q’ty[pcs]": "QFN-28",
+            "RoHS": "Reel",
+            "REACH": "5,000",
+            "Samples": "Yes",
+            "AEC-Q": "Yes",
+            "Pb-Free": "https://www.keccorp.com/en/company/contact.asp?pidx=4222&anchor=contactCon"
+        },
+        "pdf_link": null,
+        "pdf_filename": null
+    }
+}
