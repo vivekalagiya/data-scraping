@@ -1,0 +1,14 @@
+[
+    {
+        "Mating Cycle: \u226510,000 Cycles": "Voltage Rating: 120V DC (Power)\r\n30V DC (Signal)"
+    },
+    {
+        "Wire Processing: Crimp": "Current Rating: 25A + 2A"
+    },
+    {
+        "Insulation Resistance: >100M\u03a9 at DC 500V": "Peak Current: Power 180A 30S"
+    },
+    {
+        "Wire Gauge: Power 12AWG/Max\nSignal 20AWG/Max": "Withstand Voltage: 2,000V AC (Power)\r\n500V AC (Signal)"
+    }
+]
