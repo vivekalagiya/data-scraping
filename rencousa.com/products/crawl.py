@@ -31,45 +31,51 @@ ZYTE_API_KEY = os.getenv("ZYTE_API_KEY")  # set this in your environment
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 SITE_CONFIG = {
+    # rencousa CATEGORY page e.g. /products/common-mode-chokes
+    # Unique marker: <li class="pager-next"> only exists on paginated listing pages
     "category": {
-        "main_selector": ".category-list",
-        "markdown": [".category-list"],
+        "main_selector": "li.pager-next",
+        "markdown": ["#main-content-area"],
         "documentation": [],
     },
 
+    # rencousa has no separate group tier — kept for structural parity, will never fire
     "group": {
-        "main_selector": ".search-product-list",
-        "product_container": ".product-list-item",
-        "markdown": ["#family-page h1"],
+        "main_selector": ".renco-group-never-matches",
+        "product_container": "li",
+        "markdown": ["#main-content-area h1"],
         "documentation": [],
         "products": {
-            "name": ".product-title span",
-            "sku": ".product-number span",
-            "product_page_link": "a.product-title::attr(href)",
+            "name": "",
+            "sku": "",
+            "product_page_link": "a[href*='/products/']::attr(href)",
             "pdf_link": "",
             "pdf_filename": "",
             "image_url": "img::attr(src)",
-            "pricing": ".current-price div",
+            "pricing": "",
             "description": ""
         }
     },
 
+    # rencousa PART page e.g. /products/rl-6010
+    # Unique marker: real PDF link contains 'productfamilies/pdfs'
+    # NOTE: do NOT use href$='.pdf' — page also has broken <a href="/%20RL-6010.pdf">
     "part": {
-        "main_selector": ".product-details",
-        "markdown": [".product-details", ".marketing-area > div"],
-        "images": [".product-image-countainer .product-image-container img"],
-        "documentation": ["#accordion a[href]"],
+        "main_selector": "a[href*='productfamilies/pdfs']",
+        "markdown": ["#main-content-area"],
+        "images": ["img[src*='productfamilies/images']"],
+        "documentation": ["a[href*='productfamilies/pdfs']"],
         "block_diagrams": [],
         "design_resources": [],
         "software_tools": [],
         "products": {
-            "name": ".product-description",
+            "name": "",
             "sku": "h1",
             "product_page_link": "",
-            "pdf_link": "",
+            "pdf_link": "a[href*='productfamilies/pdfs']",
             "pdf_filename": "",
-            "image_url": ".product-image-countainer .product-image-container img::attr(src)",
-            "pricing": ".current-price div",
+            "image_url": "img[src*='productfamilies/images']::attr(src)",
+            "pricing": "",
             "description": "",
             "features": "",
             "application": "",
@@ -158,6 +164,19 @@ class Group:
         return markdown
 
     def tables(soup, url):
+        """
+        Scrapes all pages of a rencousa.com category listing.
+
+        Each product <li> structure:
+          <li>
+            "Common Mode Chokes U-Core Design"  <- NavigableString text node = name
+            <a href="/products/rl-1328"><img src=".../RL-1328.png?itok=..."></a>
+            <a href="/products/rl-1328">RL-1328</a>
+          </li>
+
+        Pagination: ?page=N   (li.pager-next present when more pages exist)
+        """
+        from bs4 import NavigableString as _NS
         tables = {}
         products = []
 
@@ -167,7 +186,7 @@ class Group:
         page_num = 0
         visited = set()
         while True:
-            page_url = url + f"?PageNumber={page_num}&PageSize=100"
+            page_url = url if page_num == 0 else f"{url}?page={page_num}"
             if page_url in visited:
                 break
             visited.add(page_url)
@@ -175,42 +194,69 @@ class Group:
             html = Core.fetch_html(page_url, "request")
             if not html:
                 break
-            soup = BeautifulSoup(html, "html.parser")
-            Core.fix_lazy_loaded_images(soup)
+            page_soup = BeautifulSoup(html, "html.parser")
+            Core.fix_lazy_loaded_images(page_soup)
 
-            container = SITE_CONFIG["group"].get("product_container")
-            
-            if not soup.select(container):
+            # Find product listing <ul>: contains <li> with /products/ link + img
+            product_ul = None
+            for ul in page_soup.select("#main-content-area ul"):
+                if ul.select_one("li a[href*='/products/'] img"):
+                    product_ul = ul
+                    break
+
+            if not product_ul:
                 break
 
-            for div in soup.select(container):
-                prod_url = extract_value(div, SITE_CONFIG["group"]["products"]["product_page_link"])
-                if prod_url and not prod_url.startswith("http"):
-                    prod_url = urljoin(base_url, prod_url)
-                sku = extract_value(div, SITE_CONFIG["group"]["products"]["sku"])
+            found_any = False
+            for li in product_ul.select("li"):
+                li_classes = li.get("class") or []
+                if any(c.startswith("pager") for c in li_classes):
+                    continue
 
-                name = extract_value(div, SITE_CONFIG["group"]["products"]["name"])
+                # SKU: <a> with part-number text and no child <img>
+                sku = None
+                prod_url = None
+                for a in li.select("a[href*='/products/']"):
+                    text = a.get_text(strip=True)
+                    if text and not a.select_one("img"):
+                        sku = text
+                        prod_url = urljoin(base_url, a.get("href", ""))
+                        break
 
-                price = extract_value(div, SITE_CONFIG["group"]["products"]["pricing"])
+                if not sku:
+                    continue
 
-                img_src = extract_value(div, SITE_CONFIG["group"]["products"]["image_url"])
+                # Image: strip CDN ?itok= query params
+                img_tag = li.select_one("img")
+                img_src = img_tag.get("src", "") if img_tag else ""
                 if img_src and not img_src.startswith("http"):
                     img_src = urljoin(base_url, img_src)
+                img_src = img_src.split("?")[0] if img_src else img_src
 
-                pdflink = extract_value(div, SITE_CONFIG["group"]["products"]["pdf_link"])
-                pdfname = pdflink.split("/")[-1] if pdflink else None
+                # Name label: first NavigableString text node inside <li>
+                name_label = None
+                for node in li.children:
+                    if isinstance(node, _NS):
+                        text = str(node).strip()
+                        if text:
+                            name_label = text
+                            break
 
                 product = {
                     "Product": sku or None,
-                    "name": name or None,
+                    "name": name_label or None,
                     "product_page_link": prod_url or None,
-                    "pdf_link": pdflink,
-                    "pdf_filename": pdfname,
-                    "image_url": img_src,
-                    "Pricing": price or None,
+                    "pdf_link": None,
+                    "pdf_filename": None,
+                    "image_url": img_src or None,
+                    "Pricing": None,
                 }
 
                 products.append(product)
+                found_any = True
+
+            if not page_soup.select_one("li.pager-next") or not found_any:
+                break
             page_num += 1
 
         tables["products"] = products
@@ -255,27 +301,54 @@ class Product:
         products = []
         product_data = {}
 
+        from bs4 import NavigableString as _NS
+
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+
         pull_right = soup.select_one("h1 .pull-right")
         if pull_right:
             pull_right.decompose()
 
+        # SKU from <h1>
         product_data["Product"] = extract_value(soup, SITE_CONFIG["part"]["products"]["sku"])
-        product_data["name"] = extract_value(soup, SITE_CONFIG["part"]["products"]["name"])
+
+        # Name label: first NavigableString after h1 siblings (skip all tag nodes)
+        name_label = None
+        h1 = soup.select_one("h1")
+        if h1:
+            for node in h1.next_siblings:
+                if isinstance(node, _NS):
+                    text = str(node).strip()
+                    if text:
+                        name_label = text
+                        break
+        product_data["name"] = name_label
+
         product_data["Pricing"] = extract_value(soup, SITE_CONFIG["part"]["products"]["pricing"])
-        product_data["image_url"] = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+
+        # Image: strip CDN ?itok= query params
+        img_url = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+        if img_url and not img_url.startswith("http"):
+            img_url = urljoin(base_url, img_url)
+        if img_url:
+            img_url = img_url.split("?")[0]
+        product_data["image_url"] = img_url
+
         product_data["product_page_link"] = url
-        # PDF Links and Filenames
+
+        # PDF links: use a[href*='productfamilies/pdfs'] — avoids broken wrapper link
         pdf_links = []
         pdf_names = []
-
         for a in soup.select(SITE_CONFIG["part"]["products"]["pdf_link"]):
             href = a.get("href")
             if not href:
                 continue
-
             pdf_url = href.strip()
+            if not pdf_url.startswith("http"):
+                pdf_url = urljoin(base_url, pdf_url)
             pdf_links.append(pdf_url)
-            pdf_names.append(pdf_url.split("/")[-1])
+            pdf_names.append(unquote(urlparse(pdf_url).path.split("/")[-1]))
 
         if pdf_links:
             if len(pdf_links) == 1:
@@ -285,137 +358,46 @@ class Product:
                 product_data["pdf_link"] = pdf_links
                 product_data["pdf_filename"] = pdf_names
 
-        # -------------------------------
-        # Custom Sections
-        # -------------------------------
-        lead_time = soup.select_one("strong p")
-        if lead_time:
-            product_data["lead_time"] = lead_time.get_text(strip=True).replace("Standard Lead Time:", "").strip()
+        # Description: <p> tags after product <h3> (not APPLICATIONS/FEATURES)
+        desc_parts = []
+        for h3 in soup.select("#main-content-area h3"):
+            h3_text = h3.get_text(strip=True).upper()
+            if "APPLICATION" in h3_text or "FEATURE" in h3_text:
+                continue
+            for sibling in h3.find_next_siblings():
+                if sibling.name in ("h2", "h3", "h4"):
+                    break
+                if sibling.name == "p":
+                    text = sibling.get_text(" ", strip=True)
+                    if text:
+                        desc_parts.append(text)
+            if desc_parts:
+                break
+        if desc_parts:
+            product_data["Description"] = " ".join(desc_parts)
 
+        # Specifications: 2-column tables
+        specs = {}
+        for table in soup.select("#main-content-area table"):
+            for tr in table.select("tr"):
+                tds = tr.select("td")
+                if len(tds) == 2:
+                    key = tds[0].get_text(strip=True).rstrip(":")
+                    value = tds[1].get_text(strip=True)
+                    if key and value:
+                        specs[key] = value
+        if specs:
+            product_data["Specifications"] = specs
 
-        pdf_links = []
-        pdf_filenames = []
-        accordion = soup.select_one("#accordion")
-        if accordion:
-            panels = accordion.select(".panel-heading a")
-            for panel in panels:
-                section_name = panel.get_text(" ", strip=True).replace("+", "").strip()
-
-                target_id = panel.get("href")
-                if not target_id:
-                    continue
-
-                target_id = panel.get("href")
-                if not target_id or not target_id.startswith("#"):
-                    continue
-
-                panel_id = target_id[1:]  # remove '#'
-
-                panel_div = accordion.find(id=panel_id)
-                if not panel_div:
-                    continue
-
-                body = panel_div.select_one(".panel-body")
-                if not body:
-                    continue
-
-                # ---------- Description (text + <br>)
-                if section_name == "Description":
-                    text = " ".join(body.stripped_strings)
-                    product_data["Description"] = text
-
-                # ---------- Specifications (table → dict)
-                elif section_name == "Specifications":
-                    specs = {}
-                    for tr in body.select("tr"):
-                        tds = tr.select("td")
-                        if len(tds) == 2:
-                            key = tds[0].get_text(strip=True).replace(":", "")
-                            value = tds[1].get_text(strip=True)
-                            specs[key] = value
-                    if specs:
-                        product_data["Specifications"] = specs
-
-                # ---------- Features & Benefits (ul → list)
-                elif section_name == "Features and Benefits":
-                    features = []
-
-                    # ---------- Case 1: Proper <li> list
-                    lis = body.select("li")
-                    if lis:
-                        for li in lis:
-                            text = " ".join(li.stripped_strings)
-                            if text:
-                                features.append(text)
-
-                    # ---------- Case 2: Broken <ul> without <li>
-                    elif body.select_one("ul"):
-                        ul_text = " ".join(body.select_one("ul").stripped_strings)
-
-                        # split on large whitespace blocks
-                        parts = [p.strip() for p in ul_text.split("  ") if p.strip()]
-                        features.extend(parts)
-
-                    # ---------- Case 3: Plain text
-                    else:
-                        text = " ".join(body.stripped_strings)
-                        if text:
-                            product_data["Features and Benefits"] = text
-                            continue
-
-                    if features:
-                        product_data["Features and Benefits"] = features if len(features) > 1 else features[0]
-
-                # ---------- Product Comprise of (ul → list)
-                elif section_name == "Product Comprise of":
-                    items = []
-                    for li in body.select("li"):
-                        text = li.get_text(strip=True)
-                        if text:
-                            items.append(text)
+        # Typical Applications / Features
+        for h3 in soup.select("#main-content-area h3"):
+            heading_text = h3.get_text(strip=True).upper()
+            if "APPLICATION" in heading_text or "FEATURES" in heading_text:
+                ul = h3.find_next("ul")
+                if ul:
+                    items = [li.get_text(strip=True) for li in ul.select("li") if li.get_text(strip=True)]
                     if items:
-                        product_data["Product Comprise of"] = items
-
-                # ---------- Additional Resources (links)
-                elif section_name == "Additional Resources":
-                    resources = []
-
-                    for a in body.select("a[href]"):
-                        href = a["href"].strip()
-                        name = a.get_text(strip=True)
-
-                        # parse URL safely
-                        parsed = urlparse(href)
-                        path = parsed.path.lower()
-
-                        # only process PDFs
-                        if not path.endswith(".pdf"):
-                            continue
-
-                        filename = path.split("/")[-1]
-
-                        resources.append({
-                            "name": name,
-                            "url": href
-                        })
-
-                        # ONLY Data-Sheets go into pdf_link / pdf_filename
-                        if "data-sheet" not in name.lower():
-                            continue
-
-                        pdf_links.append(href)
-                        pdf_filenames.append(filename)
-
-                    if resources:
-                        product_data["Additional Resources"] = resources
-
-            if pdf_links:
-                if len(pdf_links) == 1:
-                    product_data["pdf_link"] = pdf_links[0]
-                    product_data["pdf_filename"] = pdf_filenames[0]
-                else:
-                    product_data["pdf_link"] = pdf_links
-                    product_data["pdf_filename"] = pdf_filenames
+                        product_data["Features and Benefits"] = items if len(items) > 1 else items[0]
 
         products.append(product_data)
         tables["products"] = products
@@ -1389,25 +1371,31 @@ def init(url, update_prices_only=False):
         logging.error(f"Failed to load URL/file {url}: {e}")
         return
 
-    # Category page (no product listings)
-    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
+    # PRODUCT PAGE: real PDF link with 'productfamilies/pdfs' in href
+    if SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
+        crawl_array["page_type"] = "product"
+        crawl_array["markdowns"] = Product.markdown(soup, url)
+        crawl_array["tables"] = Product.tables(soup, url)
+
+        if not update_prices_only:
+            crawl_array["documentation"] = Product.documentation(soup)
+            crawl_array["images"] = Product.images(soup, url)
+
+    # CATEGORY PAGE: li.pager-next only present on paginated listing pages
+    elif SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
         crawl_array["page_type"] = "category"
         crawl_array["markdowns"] = Category.markdown(soup, url)
+        crawl_array["tables"] = Group.tables(soup, url)
 
-    # Group / Sub-category (product listings available)
+    # GROUP (never fires on rencousa — kept for structural parity)
     elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(SITE_CONFIG["group"]["main_selector"]):
         crawl_array["page_type"] = "group"
         crawl_array["markdowns"] = Group.markdown(soup, url)
         crawl_array["tables"] = Group.tables(soup, url)
 
-    # Product page (detailed specs)
-    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
-        crawl_array["page_type"] = "product"
-        crawl_array["markdowns"] = Product.markdown(soup, url)
-        crawl_array["tables"] = Product.tables(soup, url)
-        if not update_prices_only:
-            crawl_array["documentation"] = Product.documentation(soup)
-            crawl_array["images"] = Product.images(soup, url)
+    else:
+        logger.error("Could not detect page type from HTML structure.")
+        return None
 
     return crawl_array
 
