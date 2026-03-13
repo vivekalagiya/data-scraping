@@ -290,6 +290,7 @@ class Product:
             if not href:
                 continue
 
+
             pdf_url = href.strip()
             pdf_links.append(pdf_url)
             pdf_names.append(pdf_url.split("/")[-1])
