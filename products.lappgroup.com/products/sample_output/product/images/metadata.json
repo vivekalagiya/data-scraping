@@ -1,0 +1,20 @@
+[
+    {
+        "name": "product.jpg",
+        "url": "https://products.lappgroup.com/typo3temp/assets/setu_products/OELFLEX_00100004_PRODUCT_1_1_463423211e1eec4f7934e4a1d1679e9ed9eb44a4.jpeg",
+        "file_path": "sample_output/product/images/product.jpg",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "OELFLEX_00100004_PRODUCT_2_1_a7fe82df03a0c4b39a124f0bd11110fcf5dd8cea.jpeg",
+        "url": "https://products.lappgroup.com/typo3temp/assets/setu_products/OELFLEX_00100004_PRODUCT_2_1_a7fe82df03a0c4b39a124f0bd11110fcf5dd8cea.jpeg",
+        "file_path": "sample_output/product/images/OELFLEX_00100004_PRODUCT_2_1_a7fe82df03a0c4b39a124f0bd11110fcf5dd8cea.jpeg",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    }
+]

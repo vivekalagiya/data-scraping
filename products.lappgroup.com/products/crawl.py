@@ -13,6 +13,7 @@ import logging
 import random
 import re
 from urllib.parse import urljoin, urlparse, urlunparse, unquote, parse_qs
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyPDF2 import PdfReader
 
 # ---------- Logging ----------
@@ -32,13 +33,14 @@ ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 SITE_CONFIG = {
     "category": {
-        "main_selector": ".category-list",
-        "markdown": [".category-list"],
+        "main_selector": "ul.nav.nav-tree",
+        "link_selector": "ul.nav.nav-tree a",
+        "markdown": [".col-12.col-lg-9"],
         "documentation": [],
     },
 
     "group": {
-        "main_selector": ".search-product-list",
+        "main_selector": "",
         "product_container": ".product-list-item",
         "markdown": ["#family-page h1"],
         "documentation": [],
@@ -55,34 +57,29 @@ SITE_CONFIG = {
     },
 
     "part": {
-        "main_selector": ".product-details",
-        "markdown": [".product-details", ".marketing-area > div"],
-        "images": [".product-image-countainer .product-image-container img"],
-        "documentation": ["#accordion a[href]"],
+        "main_selector": "table.setuArticles",
+        "markdown": ["#tabarticle-productdata", "#tabarticle-techdata"],
+        "images": ["#prod-carousel .carousel-item img"],
+        "documentation": ["a.addtracking[href]"],
         "block_diagrams": [],
         "design_resources": [],
         "software_tools": [],
         "products": {
-            "name": ".product-description",
+            "name": "h2",
             "sku": "h1",
             "product_page_link": "",
             "pdf_link": "",
             "pdf_filename": "",
-            "image_url": ".product-image-countainer .product-image-container img::attr(src)",
-            "pricing": ".current-price div",
-            "description": "",
+            "image_url": "#prod-carousel .carousel-item.active img::attr(src)",
+            "pricing": "",
+            "description": "#tabarticle-productdata",
             "features": "",
             "application": "",
-            "specification": "",
+            "specification": "#tabarticle-techdata",
             "variants": {
-                "name": "",
-                "sku": "",
-                "product_page_link": "",
-                "pdf_link": "",
-                "pdf_filename": "",
-                "image_url": "",
-                "pricing": "",
-                "description": ""
+                "table_selector": "table.setuArticles",
+                "row_selector": "tr.article",
+                "sku_cell_id_prefix": "dgp-article-"
             }
         }
     }
@@ -143,6 +140,33 @@ class Category:
         if metadata:
             documents["metadata"] = metadata
         return documents
+
+    def tables(soup, url):
+        tables = {}
+        products = []
+
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        link_sel = SITE_CONFIG["category"].get("link_selector", "ul.nav.nav-tree a")
+        for a in soup.select(link_sel):
+            href = a.get("href", "").strip()
+            name = a.get_text(strip=True)
+            if not href or not name:
+                continue
+
+            if not href.startswith("http"):
+                href = urljoin(base_url, href)
+
+            products.append({
+                "Product": name,
+                "name": name,
+                "product_page_link": href,
+            })
+
+        if products:
+            tables["products"] = products
+        return tables
 
 # ---------- Group (Sub-category with product listings) ----------
 class Group:
@@ -250,175 +274,135 @@ class Group:
         return documents
 
 class Product:
+    def _parse_article_popover(td_element, base_url):
+        """Extract PDF links from the data-bs-content popover on an article <td>."""
+        pdf_links = []
+        popover_div = td_element.select_one("[data-bs-content]")
+        if not popover_div:
+            return pdf_links
+
+        raw_html = popover_div.get("data-bs-content", "")
+        if not raw_html:
+            return pdf_links
+
+        try:
+            popover_soup = BeautifulSoup(raw_html, "html.parser")
+            for a in popover_soup.select("a[href]"):
+                href = a.get("href", "").strip()
+                if not href:
+                    continue
+                name = a.get_text(strip=True)
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
+                pdf_links.append({"name": name, "url": href})
+        except Exception as e:
+            logger.warning(f"Failed to parse article popover: {e}")
+
+        return pdf_links
+
     def tables(soup, url):
         tables = {}
         products = []
-        product_data = {}
 
-        pull_right = soup.select_one("h1 .pull-right")
-        if pull_right:
-            pull_right.decompose()
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        product_data["Product"] = extract_value(soup, SITE_CONFIG["part"]["products"]["sku"])
-        product_data["name"] = extract_value(soup, SITE_CONFIG["part"]["products"]["name"])
-        product_data["Pricing"] = extract_value(soup, SITE_CONFIG["part"]["products"]["pricing"])
-        product_data["image_url"] = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
-        product_data["product_page_link"] = url
-        # PDF Links and Filenames
-        pdf_links = []
-        pdf_names = []
+        # ---------- Shared product-level fields ----------
+        product_name = extract_value(soup, SITE_CONFIG["part"]["products"]["sku"]) or ""
+        product_desc = extract_value(soup, SITE_CONFIG["part"]["products"]["name"]) or ""
+        product_img = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+        if product_img and not product_img.startswith("http"):
+            product_img = urljoin(base_url, product_img)
 
-        for a in soup.select(SITE_CONFIG["part"]["products"]["pdf_link"]):
-            href = a.get("href")
-            if not href:
+        # Product-level PDF (addtracking link with ?type=...)
+        product_pdf_link = None
+        product_pdf_filename = None
+        for a in soup.select("a.addtracking[href]"):
+            href = a.get("href", "").strip()
+            if "type=1664268841" in href:
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
+                product_pdf_link = href
+                product_pdf_filename = href.split("/")[-1].split("?")[0] + ".pdf"
+                break
+
+        # ---------- Article variant table ----------
+        variant_cfg = SITE_CONFIG["part"]["products"].get("variants", {})
+        table_sel = variant_cfg.get("table_selector", "table.setuArticles")
+        row_sel = variant_cfg.get("row_selector", "tr.article")
+
+        article_table = soup.select_one(table_sel)
+        if not article_table:
+            logger.warning("Article table not found — returning product-level data only")
+            product_data = {
+                "Product": product_name,
+                "name": product_name,
+                "description": product_desc,
+                "product_page_link": url,
+                "pdf_link": product_pdf_link,
+                "pdf_filename": product_pdf_filename,
+                "image_url": product_img,
+            }
+            products.append(product_data)
+            tables["products"] = products
+            return tables
+
+        # Read column headers from <thead>
+        headers = []
+        thead = article_table.select_one("thead")
+        if thead:
+            for th in thead.select("th"):
+                headers.append(th.get_text(strip=True))
+
+        # Iterate article rows
+        for tr in article_table.select(row_sel):
+            tds = tr.select("td")
+            if not tds:
                 continue
 
-            pdf_url = href.strip()
-            pdf_links.append(pdf_url)
-            pdf_names.append(pdf_url.split("/")[-1])
+            # First <td> contains article number (inside a .pointer div or direct text)
+            first_td = tds[0]
+            article_id_tag = first_td.get("id", "")
+            article_no = article_id_tag.replace("dgp-article-", "") if article_id_tag.startswith("dgp-article-") else None
 
-        if pdf_links:
-            if len(pdf_links) == 1:
-                product_data["pdf_link"] = pdf_links[0]
-                product_data["pdf_filename"] = pdf_names[0]
-            else:
-                product_data["pdf_link"] = pdf_links
-                product_data["pdf_filename"] = pdf_names
+            # Fallback: extract article number from text
+            if not article_no:
+                pointer = first_td.select_one(".pointer")
+                article_no = pointer.get_text(strip=True) if pointer else first_td.get_text(strip=True)
 
-        # -------------------------------
-        # Custom Sections
-        # -------------------------------
-        lead_time = soup.select_one("strong p")
-        if lead_time:
-            product_data["lead_time"] = lead_time.get_text(strip=True).replace("Standard Lead Time:", "").strip()
+            if not article_no:
+                continue
 
+            product_data = {
+                "Product": article_no,
+                "name": product_name,
+                "description": product_desc,
+                "product_page_link": url,
+                "pdf_link": product_pdf_link,
+                "pdf_filename": product_pdf_filename,
+                "image_url": product_img,
+            }
 
-        pdf_links = []
-        pdf_filenames = []
-        accordion = soup.select_one("#accordion")
-        if accordion:
-            panels = accordion.select(".panel-heading a")
-            for panel in panels:
-                section_name = panel.get_text(" ", strip=True).replace("+", "").strip()
+            # Map remaining columns to header names (skip first=article no, skip last=basket)
+            for i, td in enumerate(tds[1:], start=1):
+                if i < len(headers) and headers[i]:
+                    col_name = headers[i]
+                    if col_name.lower() in ("", "basket"):
+                        continue
+                    product_data[col_name] = td.get_text(strip=True)
 
-                target_id = panel.get("href")
-                if not target_id:
-                    continue
+            # Per-article datasheet PDFs from popover (optional enrichment)
+            article_pdfs = Product._parse_article_popover(first_td, base_url)
+            if article_pdfs:
+                datasheet = next((p for p in article_pdfs if "datasheet" in p["name"].lower()), None)
+                if datasheet:
+                    product_data["pdf_link"] = datasheet["url"]
+                    product_data["pdf_filename"] = datasheet["url"].split("/")[-1]
 
-                target_id = panel.get("href")
-                if not target_id or not target_id.startswith("#"):
-                    continue
+            products.append(product_data)
 
-                panel_id = target_id[1:]  # remove '#'
-
-                panel_div = accordion.find(id=panel_id)
-                if not panel_div:
-                    continue
-
-                body = panel_div.select_one(".panel-body")
-                if not body:
-                    continue
-
-                # ---------- Description (text + <br>)
-                if section_name == "Description":
-                    text = " ".join(body.stripped_strings)
-                    product_data["Description"] = text
-
-                # ---------- Specifications (table → dict)
-                elif section_name == "Specifications":
-                    specs = {}
-                    for tr in body.select("tr"):
-                        tds = tr.select("td")
-                        if len(tds) == 2:
-                            key = tds[0].get_text(strip=True).replace(":", "")
-                            value = tds[1].get_text(strip=True)
-                            specs[key] = value
-                    if specs:
-                        product_data["Specifications"] = specs
-
-                # ---------- Features & Benefits (ul → list)
-                elif section_name == "Features and Benefits":
-                    features = []
-
-                    # ---------- Case 1: Proper <li> list
-                    lis = body.select("li")
-                    if lis:
-                        for li in lis:
-                            text = " ".join(li.stripped_strings)
-                            if text:
-                                features.append(text)
-
-                    # ---------- Case 2: Broken <ul> without <li>
-                    elif body.select_one("ul"):
-                        ul_text = " ".join(body.select_one("ul").stripped_strings)
-
-                        # split on large whitespace blocks
-                        parts = [p.strip() for p in ul_text.split("  ") if p.strip()]
-                        features.extend(parts)
-
-                    # ---------- Case 3: Plain text
-                    else:
-                        text = " ".join(body.stripped_strings)
-                        if text:
-                            product_data["Features and Benefits"] = text
-                            continue
-
-                    if features:
-                        product_data["Features and Benefits"] = features if len(features) > 1 else features[0]
-
-                # ---------- Product Comprise of (ul → list)
-                elif section_name == "Product Comprise of":
-                    items = []
-                    for li in body.select("li"):
-                        text = li.get_text(strip=True)
-                        if text:
-                            items.append(text)
-                    if items:
-                        product_data["Product Comprise of"] = items
-
-                # ---------- Additional Resources (links)
-                elif section_name == "Additional Resources":
-                    resources = []
-
-                    for a in body.select("a[href]"):
-                        href = a["href"].strip()
-                        name = a.get_text(strip=True)
-
-                        # parse URL safely
-                        parsed = urlparse(href)
-                        path = parsed.path.lower()
-
-                        # only process PDFs
-                        if not path.endswith(".pdf"):
-                            continue
-
-                        filename = path.split("/")[-1]
-
-                        resources.append({
-                            "name": name,
-                            "url": href
-                        })
-
-                        # ONLY Data-Sheets go into pdf_link / pdf_filename
-                        if "data-sheet" not in name.lower():
-                            continue
-
-                        pdf_links.append(href)
-                        pdf_filenames.append(filename)
-
-                    if resources:
-                        product_data["Additional Resources"] = resources
-
-            if pdf_links:
-                if len(pdf_links) == 1:
-                    product_data["pdf_link"] = pdf_links[0]
-                    product_data["pdf_filename"] = pdf_filenames[0]
-                else:
-                    product_data["pdf_link"] = pdf_links
-                    product_data["pdf_filename"] = pdf_filenames
-
-        products.append(product_data)
-        tables["products"] = products
+        if products:
+            tables["products"] = products
         return tables
 
     def markdown(soup, url):
@@ -432,33 +416,69 @@ class Product:
         markdown["overview"] = overview
         return markdown
 
-    def documentation(soup):
+    def documentation(soup, url=None):
         documents = {}
         metadata = []
+        seen_urls = set()
+
+        base_url = ""
+        if url:
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        # 1. Product-level PDF (priority)
         for sel in SITE_CONFIG["part"]["documentation"]:
             for a in soup.select(sel):
-                href = a["href"].strip()
-
-                # parse URL safely
-                parsed = urlparse(href)
-                path = parsed.path.lower()
-
-                # only process PDFs
-                if not path.endswith(".pdf"):
+                href = a.get("href", "").strip()
+                if not href:
                     continue
-                url = a["href"].strip()
 
-                parsed = urlparse(url)
-                filename = parsed.path.split("/")[-1]
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
+
+                if href in seen_urls:
+                    continue
+                seen_urls.add(href)
+
+                link_text = a.get_text(strip=True)
+                filename = href.split("/")[-1].split("?")[0]
+                if not filename.endswith(".pdf"):
+                    filename = filename + ".pdf"
 
                 metadata.append({
                     "name": filename,
-                    "url": url,
+                    "url": href,
                     "file_path": "",
                     "version": None,
                     "date": None,
                     "language": None,
-                    "description": None
+                    "description": link_text or None
+                })
+
+        # 2. Per-article datasheet PDFs (optional, from popover)
+        for td in soup.select("td[id^='dgp-article-']"):
+            article_pdfs = Product._parse_article_popover(td, base_url)
+            for pdf_info in article_pdfs:
+                pdf_url = pdf_info.get("url", "")
+                if not pdf_url or pdf_url in seen_urls:
+                    continue
+
+                parsed_pdf = urlparse(pdf_url)
+                path = parsed_pdf.path.lower()
+                if not path.endswith(".pdf"):
+                    continue
+
+                seen_urls.add(pdf_url)
+                filename = parsed_pdf.path.split("/")[-1]
+
+                metadata.append({
+                    "name": filename,
+                    "url": pdf_url,
+                    "file_path": "",
+                    "version": None,
+                    "date": None,
+                    "language": None,
+                    "description": pdf_info.get("name") or None
                 })
 
         if metadata:
@@ -468,28 +488,39 @@ class Product:
     def images(soup, url):
         images = {}
         metadata = []
+        seen_urls = set()
 
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         for sel in SITE_CONFIG["part"]["images"]:
             for img in soup.select(sel):
-                img_url = img.get("src")
-                if img_url and not img_url.startswith("http"):
+                img_url = img.get("src", "")
+
+                # Skip base64 placeholders and blank GIFs
+                if not img_url or img_url.startswith("data:"):
+                    continue
+
+                # Convert to absolute URL
+                if not img_url.startswith("http"):
                     img_url = urljoin(base_url, img_url)
                 if img_url.startswith("http://"):
                     img_url = img_url.replace("http://", "https://", 1)
-                if img_url:
-                    img_filename = img_url.split("/")[-1]
-                    metadata.append({
-                        "name": img_filename,
-                        "url": img_url,
-                        "file_path": "",
-                        "version": None,
-                        "date": None,
-                        "language": None,
-                        "description": None
-                    })
+
+                if img_url in seen_urls:
+                    continue
+                seen_urls.add(img_url)
+
+                img_filename = img_url.split("/")[-1].split("?")[0]
+                metadata.append({
+                    "name": img_filename,
+                    "url": img_url,
+                    "file_path": "",
+                    "version": None,
+                    "date": None,
+                    "language": None,
+                    "description": None
+                })
 
         if metadata:
             images["metadata"] = metadata
@@ -1389,10 +1420,20 @@ def init(url, update_prices_only=False):
         logging.error(f"Failed to load URL/file {url}: {e}")
         return
 
-    # Category page (no product listings)
-    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
+    # Product page (detected first — article table present)
+    if SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
+        crawl_array["page_type"] = "product"
+        crawl_array["markdowns"] = Product.markdown(soup, url)
+        crawl_array["tables"] = Product.tables(soup, url)
+        if not update_prices_only:
+            crawl_array["documentation"] = Product.documentation(soup, url)
+            crawl_array["images"] = Product.images(soup, url)
+
+    # Category page (nav-tree with subcategory/product links)
+    elif SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
         crawl_array["page_type"] = "category"
         crawl_array["markdowns"] = Category.markdown(soup, url)
+        crawl_array["tables"] = Category.tables(soup, url)
 
     # Group / Sub-category (product listings available)
     elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(SITE_CONFIG["group"]["main_selector"]):
@@ -1400,16 +1441,103 @@ def init(url, update_prices_only=False):
         crawl_array["markdowns"] = Group.markdown(soup, url)
         crawl_array["tables"] = Group.tables(soup, url)
 
-    # Product page (detailed specs)
-    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
-        crawl_array["page_type"] = "product"
-        crawl_array["markdowns"] = Product.markdown(soup, url)
-        crawl_array["tables"] = Product.tables(soup, url)
-        if not update_prices_only:
-            crawl_array["documentation"] = Product.documentation(soup)
-            crawl_array["images"] = Product.images(soup, url)
-
     return crawl_array
+
+
+# ---------------------------------------------------------------------------
+# Parallel download orchestrator (ThreadPoolExecutor)
+# ---------------------------------------------------------------------------
+def parallel_init(topic_folder, data, update_prices_only=False):
+    """Drop-in replacement for Core.init() that downloads folders in parallel.
+
+    Local processing (tables, markdowns) runs first synchronously.
+    I/O-bound download folders (documentation, images, …) run concurrently
+    via ThreadPoolExecutor so multiple HTTP downloads happen at the same time.
+    """
+    structure_folders = {
+        "documentation": Core.download_general_files,
+        "images": Core.download_images_files,
+        "block_diagrams": Core.download_block_diagrams_files,
+        "design_resources": Core.download_general_files,
+        "software_tools": Core.download_general_files,
+        "trainings": Core.download_general_files,
+        "other": Core.download_general_files,
+        "tables": Core.prepare_products_table,
+        "markdowns": Core.prepare_markdown_file,
+    }
+
+    page_type = data.get("page_type", None)
+    if page_type == "product":
+        structure_folders_filter = structure_folders
+    else:
+        structure_folders_filter = {
+            k: v for k, v in structure_folders.items() if k in data
+        }
+
+    Core.create_output_folders(topic_folder, page_type, update_prices_only)
+
+    # ── Phase 1: local processing (fast, no network I/O) ──
+    local_folders = {"tables", "markdowns"}
+    for folder in ("tables", "markdowns"):
+        if folder not in structure_folders_filter or not data.get(folder):
+            continue
+        method = structure_folders_filter[folder]
+        final_path = os.path.join(topic_folder, folder)
+        try:
+            if folder == "markdowns":
+                success = method(data.get(folder), final_path, "overview.md")
+            else:
+                success = method(data.get(folder), final_path, "products.json")
+            if success:
+                logger.info(f"Successfully processed {folder}")
+            else:
+                logger.error(f"Failed to process {folder}")
+        except Exception as e:
+            logger.error(f"Error processing {folder}: {e}")
+
+    # ── Phase 2: parallel downloads (I/O-bound) ──
+    download_tasks = {
+        folder: method
+        for folder, method in structure_folders_filter.items()
+        if folder not in local_folders and data.get(folder)
+    }
+
+    if not download_tasks:
+        return
+
+    max_workers = min(len(download_tasks), 4)
+    logger.info(
+        f"Starting parallel downloads for {len(download_tasks)} folder(s) "
+        f"with {max_workers} worker(s)"
+    )
+
+    def _download_folder(folder, method):
+        final_path = os.path.join(topic_folder, folder)
+        success = method(
+            data.get(folder),
+            final_path,
+            3,      # max_retries
+            2,      # retry_delay
+            False,  # rename_by_detected_type
+        )
+        return folder, success
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_download_folder, folder, method): folder
+            for folder, method in download_tasks.items()
+        }
+        for future in as_completed(futures):
+            folder_name = futures[future]
+            try:
+                name, success = future.result()
+                if success:
+                    logger.info(f"Successfully processed {name}")
+                else:
+                    logger.error(f"Failed to process {name}")
+            except Exception as e:
+                logger.error(f"Exception in {folder_name}: {e}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Array-driven scraper")
@@ -1423,5 +1551,5 @@ if __name__ == "__main__":
     if not crawl_array:
         logger.error("data extraction failed.")
     else:
-        Core.init(args.out, crawl_array, args.update_only_prices)
+        parallel_init(args.out, crawl_array, args.update_only_prices)
         logger.info("Done")

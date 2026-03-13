@@ -1,0 +1,47 @@
+[
+    {
+        "name": "LAPP_PRO100890EN.pdf",
+        "url": "https://products.lappgroup.com/online-catalogue/power-and-control-cables/various-applications/pvc-outer-sheath-and-coloured-cores/oelflex-classic-100-300500-v.html?type=1664268841",
+        "file_path": "sample_output/product/documentation/LAPP_PRO100890EN.pdf",
+        "version": null,
+        "date": "2026-01-25",
+        "language": null,
+        "description": "product information (PDF)"
+    },
+    {
+        "name": "DB00100004EN.pdf",
+        "url": "https://products.lappgroup.com/fileadmin/documents/technische_doku/datenblaetter/oelflex/DB00100004EN.pdf",
+        "file_path": "sample_output/product/documentation/DB00100004EN.pdf",
+        "version": null,
+        "date": "2024-05-23",
+        "language": null,
+        "description": "Datasheet (PDF)"
+    },
+    {
+        "name": "UILCPRDOP17_00100004-1EN.pdf",
+        "url": "https://products.lappgroup.com/fileadmin/documents/technische_doku/zertifikate/oelflex/UILCPRDOP17_00100004-1EN.pdf",
+        "file_path": "sample_output/product/documentation/UILCPRDOP17_00100004-1EN.pdf",
+        "version": null,
+        "date": "2025-12-01",
+        "language": null,
+        "description": "CPR-Declaration (PDF)"
+    },
+    {
+        "name": "CE00100004EN.pdf",
+        "url": "https://products.lappgroup.com/fileadmin/documents/technische_doku/zertifikate/oelflex/CE00100004EN.pdf",
+        "file_path": "sample_output/product/documentation/CE00100004EN.pdf",
+        "version": null,
+        "date": "2025-06-05",
+        "language": null,
+        "description": "EU CE Conformity"
+    },
+    {
+        "name": "RP0010004EN.pdf",
+        "url": "https://products.lappgroup.com/fileadmin/documents/technische_doku/zertifikate/oelflex/RP0010004EN.pdf",
+        "file_path": "sample_output/product/documentation/RP0010004EN.pdf",
+        "version": null,
+        "date": "2017-11-17",
+        "language": null,
+        "description": "UN/ECE-R118-testrecord"
+    }
+]
