@@ -248,12 +248,12 @@ class Group:
                 product = {
                     "Product": sku or name or None,
                     "name": name or None,
-                    "Description": desc or None,
+                    "description": desc or None,
                     "product_page_link": prod_url or None,
                     "pdf_link": pdflink,
                     "pdf_filename": pdfname,
                     "image_url": img_src,
-                    "Pricing": price or None,
+                    "pricing": price or None,
                 }
 
                 products.append(product)
@@ -288,7 +288,7 @@ class Group:
                     "pdf_link": None,
                     "pdf_filename": None,
                     "image_url": img_src,
-                    "Pricing": None,
+                    "pricing": None,
                 }
                 products.append(product)
 
@@ -356,7 +356,7 @@ class Product:
         h2_tags = soup.select("h2")
         descriptions = [h.get_text(strip=True) for h in h2_tags if h.get_text(strip=True)]
         if descriptions:
-            product_data["Description"] = descriptions[0] if len(descriptions) == 1 else descriptions
+            product_data["description"] = "; ".join(descriptions)
 
         # -----------------------------------------------------------------------
         # Features: h3 titles + following p body inside .show-animate containers
@@ -370,7 +370,7 @@ class Product:
                 if title:
                     features.append(f"{title}: {body}" if body else title)
         if features:
-            product_data["Features"] = features
+            product_data["features"] = features
 
         # -----------------------------------------------------------------------
         # Product image
@@ -383,7 +383,7 @@ class Product:
                 img_url = img_url.replace("http://", "https://", 1)
         product_data["image_url"] = img_url
         product_data["product_page_link"] = url
-        product_data["Pricing"] = None
+        product_data["pricing"] = None
 
         # -----------------------------------------------------------------------
         # Related Resources and PDF links
@@ -417,7 +417,7 @@ class Product:
                 pdf_filenames.append(filename)
 
         if resources:
-            product_data["Related Resources"] = resources
+            product_data["related_resources"] = resources
 
         if pdf_links:
             product_data["pdf_link"] = pdf_links[0] if len(pdf_links) == 1 else pdf_links
