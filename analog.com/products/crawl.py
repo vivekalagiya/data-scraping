@@ -14,6 +14,7 @@ import random
 import re
 from urllib.parse import urljoin, urlparse, urlunparse, unquote, parse_qs
 from PyPDF2 import PdfReader
+from urllib.parse import urlparse
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -30,16 +31,16 @@ CONFIG = {
 ZYTE_API_KEY = os.getenv("ZYTE_API_KEY")  # set this in your environment
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
-SITE_CONFIG = {
+"""SITE_CONFIG = {
     "category": {
-        "main_selector": ".category-list",
+        "main_selector": ".category",
         "markdown": [".category-list"],
         "documentation": [],
     },
 
     "group": {
-        "main_selector": ".search-product-list",
-        "product_container": ".product-list-item",
+        "main_selector": "a[href*='/products/']",
+        "product_container": "a[href*='/products/']",
         "markdown": ["#family-page h1"],
         "documentation": [],
         "products": {
@@ -55,10 +56,10 @@ SITE_CONFIG = {
     },
 
     "part": {
-        "main_selector": ".product-details",
+        "main_selector": "h1",
         "markdown": [".product-details", ".marketing-area > div"],
         "images": [".product-image-countainer .product-image-container img"],
-        "documentation": ["#accordion a[href]"],
+        "documentation": ["a[href$='.pdf']"],
         "block_diagrams": [],
         "design_resources": [],
         "software_tools": [],
@@ -84,6 +85,52 @@ SITE_CONFIG = {
                 "pricing": "",
                 "description": ""
             }
+        }
+    }
+}"""
+
+SITE_CONFIG = {
+
+    "category": {
+        "main_selector": "title",
+        "markdown": ["main"],
+        "documentation": [],
+    },
+
+    "group": {
+        "main_selector": "title",
+        "product_container": "a[href*='/products/']",
+        "markdown": ["main"],
+        "documentation": [],
+        "products": {
+            "name": "",
+            "sku": "",
+            "product_page_link": "::attr(href)",
+            "pdf_link": "",
+            "pdf_filename": "",
+            "image_url": "img::attr(src)",
+            "pricing": "",
+            "description": ""
+        }
+    },
+
+    "part": {
+        "main_selector": "link[rel='canonical'][href*='/products/']",
+        "markdown": ["main"],
+        "images": [".product-image-countainer .product-image-container img"],
+        "documentation": ["a[href$='.pdf']"],
+        "block_diagrams": [],
+        "design_resources": [],
+        "software_tools": [],
+        "products": {
+            "name": "h1",
+            "sku": "h1",
+            "product_page_link": "",
+            "pdf_link": "a[href$='.pdf']",
+            "pdf_filename": "",
+            "image_url": "img::attr(src)",
+            "pricing": "",
+            "description": "",
         }
     }
 }
@@ -177,6 +224,16 @@ class Group:
                 break
             soup = BeautifulSoup(html, "html.parser")
             Core.fix_lazy_loaded_images(soup)
+            path = urlparse(url).path.lower()
+            if "/products/" in path:
+                crawl_array["page_type"] = "product"
+                crawl_array["markdowns"] = Product.markdown(soup, url)
+                crawl_array["tables"] = Product.tables(soup, url)
+                if not update_prices_only:
+                    crawl_array["documentation"] = Product.documentation(soup)
+                    crawl_array["images"] = Product.images(soup, url)
+                return crawl_array
+            print(soup.title)
 
             container = SITE_CONFIG["group"].get("product_container")
             
@@ -1376,52 +1433,87 @@ class Core:
 
 def init(url, update_prices_only=False):
     crawl_array = {}
-    soup = None
+
     try:
-        html = Core.fetch_html(url, "request")
+        html = Core.fetch_html(url, "zyte")
+
         if not html:
             logging.error(f"Empty HTML for {url}")
             return None
+
         soup = BeautifulSoup(html, "html.parser")
         Core.fix_lazy_loaded_images(soup)
 
+        # -----------------------------
+        # PRODUCT PAGE DETECTION
+        # -----------------------------
+        if soup.select_one("h1") and soup.select_one("a[href$='.pdf']"):
+
+            crawl_array["page_type"] = "product"
+
+            crawl_array["markdowns"] = Product.markdown(soup, url)
+
+            sku_tag = soup.select_one("h1")
+            sku = sku_tag.get_text(strip=True) if sku_tag else "Unknown"
+
+            # product image
+            img = soup.select_one(".product-image-container img")
+            if not img:
+                img = soup.select_one("img")
+
+            img_url = img["src"] if img and img.has_attr("src") else None
+
+            # datasheet pdf
+            pdf = soup.select_one("a[href*='data-sheet'][href$='.pdf']")
+            if not pdf:
+                pdf = soup.select_one("a[href$='.pdf']")
+
+            pdf_url = pdf["href"] if pdf else None
+
+            crawl_array["tables"] = {
+                "products": [
+                    {
+                        "Product": sku,
+                        "name": sku,
+                        "product_page_link": url,
+                        "pdf_link": pdf_url,
+                        "pdf_filename": pdf_url.split("/")[-1] if pdf_url else None,
+                        "image_url": img_url,
+                        "Pricing": None
+                    }
+                ]
+            }
+
+            if not update_prices_only:
+                crawl_array["documentation"] = Product.documentation(soup)
+                crawl_array["images"] = Product.images(soup, url)
+
+            return crawl_array
+
+        # -----------------------------
+        # GROUP PAGE DETECTION
+        # -----------------------------
+        elif soup.select("a[href*='/products/']"):
+
+            crawl_array["page_type"] = "group"
+
+            crawl_array["markdowns"] = Group.markdown(soup, url)
+
+            crawl_array["tables"] = Group.tables(soup, url)
+
+            return crawl_array
+
+        # -----------------------------
+        # CATEGORY PAGE
+        # -----------------------------
+        else:
+
+            crawl_array["page_type"] = "category"
+
+            crawl_array["markdowns"] = Category.markdown(soup, url)
+
+            return crawl_array
+
     except Exception as e:
         logging.error(f"Failed to load URL/file {url}: {e}")
-        return
-
-    # Category page (no product listings)
-    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
-        crawl_array["page_type"] = "category"
-        crawl_array["markdowns"] = Category.markdown(soup, url)
-
-    # Group / Sub-category (product listings available)
-    elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(SITE_CONFIG["group"]["main_selector"]):
-        crawl_array["page_type"] = "group"
-        crawl_array["markdowns"] = Group.markdown(soup, url)
-        crawl_array["tables"] = Group.tables(soup, url)
-
-    # Product page (detailed specs)
-    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
-        crawl_array["page_type"] = "product"
-        crawl_array["markdowns"] = Product.markdown(soup, url)
-        crawl_array["tables"] = Product.tables(soup, url)
-        if not update_prices_only:
-            crawl_array["documentation"] = Product.documentation(soup)
-            crawl_array["images"] = Product.images(soup, url)
-
-    return crawl_array
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Array-driven scraper")
-    parser.add_argument("--url", required=True, help="URL or local HTML file path to scrape")
-    parser.add_argument("--out", required=True, help="Output directory")
-    parser.add_argument("--update-only-prices",action="store_true",help="Only update prices")
-    args = parser.parse_args()
-
-    crawl_array = init(args.url, args.update_only_prices)
-
-    if not crawl_array:
-        logger.error("data extraction failed.")
-    else:
-        Core.init(args.out, crawl_array, args.update_only_prices)
-        logger.info("Done")
+        return None

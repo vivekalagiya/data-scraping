@@ -1,0 +1,83 @@
+[
+    {
+        "name": "ad9088.pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad9088.pdf",
+        "file_path": "output/part/documentation/ad9088.pdf",
+        "version": null,
+        "date": "2026-02-02",
+        "language": null,
+        "description": "AD9088 (Rev.0)"
+    },
+    {
+        "name": "ad9088(1).pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad9088.pdf",
+        "file_path": "output/part/documentation/ad9088(1).pdf",
+        "version": null,
+        "date": "2026-02-02",
+        "language": null,
+        "description": "AD9088 (Rev.0)"
+    },
+    {
+        "name": "ad9088(2).pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad9088.pdf",
+        "file_path": "output/part/documentation/ad9088(2).pdf",
+        "version": null,
+        "date": "2026-02-02",
+        "language": null,
+        "description": "AD9088 (Rev.0)"
+    },
+    {
+        "name": "eval-ad9084-ad9088-ug-2326.pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/user-guides/eval-ad9084-ad9088-ug-2326.pdf",
+        "file_path": "output/part/documentation/eval-ad9084-ad9088-ug-2326.pdf",
+        "version": null,
+        "date": "2026-02-11",
+        "language": null,
+        "description": "UG-2326 (Rev.A)"
+    },
+    {
+        "name": "ad9084-ad9088-ug.pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/user-guides/ad9084-ad9088-ug.pdf",
+        "file_path": "output/part/documentation/ad9084-ad9088-ug.pdf",
+        "version": null,
+        "date": "2026-03-11",
+        "language": null,
+        "description": "UG-2300 (Rev.PrJ)"
+    },
+    {
+        "name": "rf-microwave-and-millimeter-wave-ic-selection-guide.pdf",
+        "url": "https://www.analog.com/media/en/news-marketing-collateral/product-selection-guide/rf-microwave-and-millimeter-wave-ic-selection-guide.pdf",
+        "file_path": "output/part/documentation/rf-microwave-and-millimeter-wave-ic-selection-guide.pdf",
+        "version": null,
+        "date": "2022-05-31",
+        "language": null,
+        "description": "RF Microwave and Millimeter Wave Products Selection Guide"
+    },
+    {
+        "name": "ad9088(3).pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad9088.pdf",
+        "file_path": "output/part/documentation/ad9088(3).pdf",
+        "version": null,
+        "date": "2026-02-02",
+        "language": null,
+        "description": "AD9088 (Rev.0)"
+    },
+    {
+        "name": "eval-admx7103.pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/user-guides/eval-admx7103.pdf",
+        "file_path": "output/part/documentation/eval-admx7103.pdf",
+        "version": null,
+        "date": "2025-12-03",
+        "language": null,
+        "description": "Rev.0"
+    },
+    {
+        "name": "eval-ad9084-ad9088-ug-2326(1).pdf",
+        "url": "https://www.analog.com/media/en/technical-documentation/user-guides/eval-ad9084-ad9088-ug-2326.pdf",
+        "file_path": "output/part/documentation/eval-ad9084-ad9088-ug-2326(1).pdf",
+        "version": null,
+        "date": "2026-02-11",
+        "language": null,
+        "description": "UG-2326 (Rev.A)"
+    }
+]
