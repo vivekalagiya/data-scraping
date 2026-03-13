@@ -1,0 +1,54 @@
+[
+  {
+    "name": "Products",
+    "product_page_link": "https://www.busboard.com/products"
+  },
+  {
+    "name": "Catalog",
+    "product_page_link": "http://www.busboard.com/documents/BPS-ProductCatalog.pdf"
+  },
+  {
+    "name": "Support",
+    "product_page_link": "https://www.busboard.com/faq"
+  },
+  {
+    "name": "Where To Buy",
+    "product_page_link": "https://www.busboard.com/distributors"
+  },
+  {
+    "name": "DatasheetPDF - 827KB",
+    "product_page_link": "https://www.busboard.com/documents/datasheets/BPS-DAT-(BB830)-Datasheet.pdf"
+  },
+  {
+    "name": "Genuine DifferencePDF - 425KB",
+    "product_page_link": "https://www.busboard.com/documents/BPS-GenuineDifferenceBreadBoards.pdf"
+  },
+  {
+    "name": "BB400",
+    "product_page_link": "https://www.busboard.com/BB400"
+  },
+  {
+    "name": "SB830",
+    "product_page_link": "https://www.busboard.com/SB830"
+  },
+  {
+    "name": "BB1460",
+    "product_page_link": "https://www.busboard.com/BB1460"
+  },
+  {
+    "name": "ZW-MM-10",
+    "product_page_link": "https://www.busboard.com/ZW-MM-10"
+  },
+  {
+    "name": "ZW-MM-20",
+    "product_page_link": "https://www.busboard.com/ZW-MM-20"
+  },
+  {
+    "name": "PW-3AA",
+    "product_page_link": "https://www.busboard.com/PW-3AA"
+  },
+  {
+    "name": "info@busboard.com",
+    "product_page_link": "mailto:info@busboard.com"
+  }
+]

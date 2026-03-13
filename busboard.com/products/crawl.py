@@ -1,8 +1,12 @@
 import os
 import time
+
+# import curl_cffi.requests as requests
 import curl_cffi.requests as requests
 from curl_cffi.requests import RequestsError
 from base64 import b64decode
+import requests
+from urllib.parse import urljoin
 import filetype
 import json
 import argparse
@@ -19,41 +23,39 @@ from PyPDF2 import PdfReader
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
-CONFIG = {
-    "verify_ssl": True  # Disable SSL verification for problematic sites
-}
+CONFIG = {"verify_ssl": True}  # Disable SSL verification for problematic sites
 
 ZYTE_API_KEY = os.getenv("ZYTE_API_KEY")  # set this in your environment
+
+# ZYTE_API_KEY = ""
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 SITE_CONFIG = {
     "category": {
-        "main_selector": ".category-list",
-        "markdown": [".category-list"],
+        "main_selector": "body",
+        "markdown": ["body"],
         "documentation": [],
     },
-
     "group": {
-        "main_selector": ".search-product-list",
-        "product_container": ".product-list-item",
-        "markdown": ["#family-page h1"],
+        "main_selector": "body",
+        "product_container": "a[href]",
+        "markdown": ["h1"],
         "documentation": [],
         "products": {
-            "name": ".product-title span",
-            "sku": ".product-number span",
-            "product_page_link": "a.product-title::attr(href)",
+            "name": "a",
+            "sku": "",
+            "product_page_link": "a::attr(href)",
             "pdf_link": "",
             "pdf_filename": "",
-            "image_url": "img::attr(src)",
-            "pricing": ".current-price div",
-            "description": ""
-        }
+            "image_url": "",
+            "pricing": "",
+            "description": "",
+        },
     },
-
     "part": {
         "main_selector": ".product-details",
         "markdown": [".product-details", ".marketing-area > div"],
@@ -71,22 +73,139 @@ SITE_CONFIG = {
             "image_url": ".product-image-countainer .product-image-container img::attr(src)",
             "pricing": ".current-price div",
             "description": "",
-            "features": "",
-            "application": "",
-            "specification": "",
-            "variants": {
-                "name": "",
-                "sku": "",
-                "product_page_link": "",
-                "pdf_link": "",
-                "pdf_filename": "",
-                "image_url": "",
-                "pricing": "",
-                "description": ""
-            }
-        }
-    }
+        },
+    },
 }
+
+
+# ---------- Utility Functions ----------
+
+
+def create_product_structure(base_path):
+
+    folders = [
+        "documentation",
+        "images",
+        "block_diagrams",
+        "design_resources",
+        "software_tools",
+        "tables",
+        "markdowns",
+        "trainings",
+        "other",
+    ]
+
+    for folder in folders:
+        os.makedirs(os.path.join(base_path, folder), exist_ok=True)
+
+
+# ---------- Download Image ----------
+def download_image(url, path):
+
+    r = requests.get(url)
+
+    with open(path, "wb") as f:
+        f.write(r.content)
+
+
+# ---------- Fetch Page ----------
+def fetch_page(url):
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    }
+
+    for attempt in range(3):
+
+        try:
+            r = requests.get(url, headers=headers, timeout=30)
+            r.raise_for_status()
+            return r.text
+
+        except Exception as e:
+            print("Retry...", e)
+            time.sleep(2)
+
+    raise Exception("Failed after retries")
+
+
+# ---------- Detect Page ----------
+def detect_page_type(soup):
+
+    if soup.select_one(".product-details"):
+        return "part"
+
+    return "category"
+
+
+def main():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--out", required=True)
+
+    args = parser.parse_args()
+
+    url = args.url
+    output_dir = args.out
+
+    html = fetch_page(url)
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    page_type = detect_page_type(soup)
+
+    # ---------- CATEGORY ----------
+    if page_type == "category":
+
+        os.makedirs(os.path.join(output_dir, "tables"), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "markdowns"), exist_ok=True)
+
+        products = []
+
+        for link in soup.select("a[href]"):
+
+            name = link.get_text(strip=True)
+            product_link = link.get("href")
+
+            if name and product_link:
+
+                product_link = urljoin(url, product_link)
+
+                products.append({
+                    "name": name,
+                    "product_page_link": product_link
+                })
+
+        with open(os.path.join(output_dir, "tables", "products.json"), "w") as f:
+            json.dump(products, f, indent=2)
+
+    # ---------- PRODUCT ----------
+    if page_type == "part":
+
+        create_product_structure(output_dir)
+
+        image = soup.select_one("img")
+
+        print("IMAGE TAG:", image)
+        if image and image.get("src"):
+
+
+            image_url = image.get("src") or image.get("data-src")
+            print("Downloading image:", image_url)
+
+            image_path = os.path.join(output_dir, "images", "product.jpeg")
+
+            download_image(image_url, image_path)
+        else:
+            print("Image not found")
+
+        metadata = {"source": url}
+
+        with open(os.path.join(output_dir, "tables", "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=2)
+
 
 def extract_value(element, selector):
     if not selector:
@@ -101,6 +220,7 @@ def extract_value(element, selector):
     tag = element.select_one(selector)
     return tag.get_text(strip=True) if tag else None
 
+
 class Category:
     def markdown(soup, url):
         markdown = {}
@@ -108,7 +228,7 @@ class Category:
         for sel in SITE_CONFIG["category"]["markdown"]:
             cat_overview = Core.write_overview_markdown(soup, sel, "Category", url)
             overview.append(cat_overview)
-        markdown['overview'] = overview
+        markdown["overview"] = overview
         return markdown
 
     def documentation(soup):
@@ -130,19 +250,22 @@ class Category:
                 parsed = urlparse(url)
                 filename = parsed.path.split("/")[-1]
 
-                metadata.append({
-                    "name": filename,
-                    "url": url,
-                    "file_path": "",
-                    "version": None,
-                    "date": None,
-                    "language": None,
-                    "description": None
-                })
+                metadata.append(
+                    {
+                        "name": filename,
+                        "url": url,
+                        "file_path": "",
+                        "version": None,
+                        "date": None,
+                        "language": None,
+                        "description": None,
+                    }
+                )
 
         if metadata:
             documents["metadata"] = metadata
         return documents
+
 
 # ---------- Group (Sub-category with product listings) ----------
 class Group:
@@ -176,15 +299,19 @@ class Group:
             if not html:
                 break
             soup = BeautifulSoup(html, "html.parser")
+            print(soup.prettify()[:2000])
+
             Core.fix_lazy_loaded_images(soup)
 
             container = SITE_CONFIG["group"].get("product_container")
-            
+
             if not soup.select(container):
                 break
 
             for div in soup.select(container):
-                prod_url = extract_value(div, SITE_CONFIG["group"]["products"]["product_page_link"])
+                prod_url = extract_value(
+                    div, SITE_CONFIG["group"]["products"]["product_page_link"]
+                )
                 if prod_url and not prod_url.startswith("http"):
                     prod_url = urljoin(base_url, prod_url)
                 sku = extract_value(div, SITE_CONFIG["group"]["products"]["sku"])
@@ -193,11 +320,15 @@ class Group:
 
                 price = extract_value(div, SITE_CONFIG["group"]["products"]["pricing"])
 
-                img_src = extract_value(div, SITE_CONFIG["group"]["products"]["image_url"])
+                img_src = extract_value(
+                    div, SITE_CONFIG["group"]["products"]["image_url"]
+                )
                 if img_src and not img_src.startswith("http"):
                     img_src = urljoin(base_url, img_src)
 
-                pdflink = extract_value(div, SITE_CONFIG["group"]["products"]["pdf_link"])
+                pdflink = extract_value(
+                    div, SITE_CONFIG["group"]["products"]["pdf_link"]
+                )
                 pdfname = pdflink.split("/")[-1] if pdflink else None
 
                 product = {
@@ -235,19 +366,22 @@ class Group:
                 parsed = urlparse(url)
                 filename = parsed.path.split("/")[-1]
 
-                metadata.append({
-                    "name": filename,
-                    "url": url,
-                    "file_path": "",
-                    "version": None,
-                    "date": None,
-                    "language": None,
-                    "description": None
-                })
+                metadata.append(
+                    {
+                        "name": filename,
+                        "url": url,
+                        "file_path": "",
+                        "version": None,
+                        "date": None,
+                        "language": None,
+                        "description": None,
+                    }
+                )
 
         if metadata:
             documents["metadata"] = metadata
         return documents
+
 
 class Product:
     def tables(soup, url):
@@ -259,10 +393,18 @@ class Product:
         if pull_right:
             pull_right.decompose()
 
-        product_data["Product"] = extract_value(soup, SITE_CONFIG["part"]["products"]["sku"])
-        product_data["name"] = extract_value(soup, SITE_CONFIG["part"]["products"]["name"])
-        product_data["Pricing"] = extract_value(soup, SITE_CONFIG["part"]["products"]["pricing"])
-        product_data["image_url"] = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+        product_data["Product"] = extract_value(
+            soup, SITE_CONFIG["part"]["products"]["sku"]
+        )
+        product_data["name"] = extract_value(
+            soup, SITE_CONFIG["part"]["products"]["name"]
+        )
+        product_data["Pricing"] = extract_value(
+            soup, SITE_CONFIG["part"]["products"]["pricing"]
+        )
+        product_data["image_url"] = extract_value(
+            soup, SITE_CONFIG["part"]["products"]["image_url"]
+        )
         product_data["product_page_link"] = url
         # PDF Links and Filenames
         pdf_links = []
@@ -290,8 +432,11 @@ class Product:
         # -------------------------------
         lead_time = soup.select_one("strong p")
         if lead_time:
-            product_data["lead_time"] = lead_time.get_text(strip=True).replace("Standard Lead Time:", "").strip()
-
+            product_data["lead_time"] = (
+                lead_time.get_text(strip=True)
+                .replace("Standard Lead Time:", "")
+                .strip()
+            )
 
         pdf_links = []
         pdf_filenames = []
@@ -364,7 +509,9 @@ class Product:
                             continue
 
                     if features:
-                        product_data["Features and Benefits"] = features if len(features) > 1 else features[0]
+                        product_data["Features and Benefits"] = (
+                            features if len(features) > 1 else features[0]
+                        )
 
                 # ---------- Product Comprise of (ul → list)
                 elif section_name == "Product Comprise of":
@@ -394,10 +541,7 @@ class Product:
 
                         filename = path.split("/")[-1]
 
-                        resources.append({
-                            "name": name,
-                            "url": href
-                        })
+                        resources.append({"name": name, "url": href})
 
                         # ONLY Data-Sheets go into pdf_link / pdf_filename
                         if "data-sheet" not in name.lower():
@@ -451,15 +595,17 @@ class Product:
                 parsed = urlparse(url)
                 filename = parsed.path.split("/")[-1]
 
-                metadata.append({
-                    "name": filename,
-                    "url": url,
-                    "file_path": "",
-                    "version": None,
-                    "date": None,
-                    "language": None,
-                    "description": None
-                })
+                metadata.append(
+                    {
+                        "name": filename,
+                        "url": url,
+                        "file_path": "",
+                        "version": None,
+                        "date": None,
+                        "language": None,
+                        "description": None,
+                    }
+                )
 
         if metadata:
             documents["metadata"] = metadata
@@ -481,19 +627,22 @@ class Product:
                     img_url = img_url.replace("http://", "https://", 1)
                 if img_url:
                     img_filename = img_url.split("/")[-1]
-                    metadata.append({
-                        "name": img_filename,
-                        "url": img_url,
-                        "file_path": "",
-                        "version": None,
-                        "date": None,
-                        "language": None,
-                        "description": None
-                    })
+                    metadata.append(
+                        {
+                            "name": img_filename,
+                            "url": img_url,
+                            "file_path": "",
+                            "version": None,
+                            "date": None,
+                            "language": None,
+                            "description": None,
+                        }
+                    )
 
         if metadata:
             images["metadata"] = metadata
         return images
+
 
 class Core:
     def init(topic_folder, data, update_prices_only=False):
@@ -506,11 +655,11 @@ class Core:
             "trainings": Core.download_general_files,
             "other": Core.download_general_files,
             "tables": Core.prepare_products_table,
-            "markdowns": Core.prepare_markdown_file
+            "markdowns": Core.prepare_markdown_file,
         }
 
         page_type = data.get("page_type", None)
-        if page_type  == "product":
+        if page_type == "product":
             structure_folders_filter = structure_folders
         else:
             structure_folders_filter = {
@@ -529,21 +678,19 @@ class Core:
                 try:
                     if folder == "markdowns":
                         success = method(
-                            data.get(folder),
-                            final_structure_folder,
-                            "overview.md")
+                            data.get(folder), final_structure_folder, "overview.md"
+                        )
                     elif folder == "tables":
                         success = method(
-                            data.get(folder),
-                            final_structure_folder,
-                            "products.json")
+                            data.get(folder), final_structure_folder, "products.json"
+                        )
                     else:
                         success = method(
                             data.get(folder),
                             final_structure_folder,
-                            3,  #max_retries
-                            2,  #retry_delay
-                            False #rename_by_detected_type
+                            3,  # max_retries
+                            2,  # retry_delay
+                            False,  # rename_by_detected_type
                         )
 
                     if success == True:
@@ -610,38 +757,35 @@ class Core:
 
         return dirs
 
-    def fetch_html_with_zyte(url: str, max_retries: int = 3, selector = None) -> str:
+    def fetch_html_with_zyte(url: str, max_retries: int = 3, selector=None) -> str:
         if not ZYTE_API_KEY:
             logger.critical("ZYTE_API_KEY not set in environment")
             sys.exit(1)
 
-        payload = {
-            "url": url,
-            "browserHtml": True,
-            "javascript": True
-        }
+        payload = {"url": url, "browserHtml": True, "javascript": True}
         if selector:
-            payload["actions"] = [{
-                "action": "waitForSelector",
-                "selector": {"type": "css", "value": selector},
-                "timeout": 15
-            }]
+            payload["actions"] = [
+                {
+                    "action": "waitForSelector",
+                    "selector": {"type": "css", "value": selector},
+                    "timeout": 15,
+                }
+            ]
 
         for attempt in range(max_retries):
             try:
 
                 resp = requests.post(
-                    ZYTE_API_URL,
-                    auth=(ZYTE_API_KEY, ""),
-                    json=payload,
-                    timeout=90
+                    ZYTE_API_URL, auth=(ZYTE_API_KEY, ""), json=payload, timeout=90
                 )
 
                 if resp.status_code == 200:
                     data = resp.json()
                     html = data.get("browserHtml") or data.get("httpResponseBody")
                     if html:
-                        logger.info(f"✅ Zyte fetched page successfully on attempt {attempt + 1}")
+                        logger.info(
+                            f"✅ Zyte fetched page successfully on attempt {attempt + 1}"
+                        )
                         return html
                     else:
                         raise Exception("Zyte returned empty HTML or body")
@@ -649,28 +793,40 @@ class Core:
                 raise Exception(f"Zyte API returned {resp.status_code}: {resp.text}")
 
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1}/{max_retries} failed for {url}: {e}")
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed for {url}: {e}"
+                )
                 if attempt < max_retries - 1:
-                    time.sleep((2 ** attempt) + random.uniform(0, 1))  # exponential backoff
+                    time.sleep(
+                        (2**attempt) + random.uniform(0, 1)
+                    )  # exponential backoff
                 else:
                     logger.error(f"❌ Failed after {max_retries} attempts for {url}")
                     raise
 
-    def get_requests(url, headers=None, timeout=60,stream=False, retries=3):
+    def get_requests(url, headers=None, timeout=60, stream=False, retries=3):
         """
         Fetch URL with retry logic:
         1. Try curl_cffi.requests with retries
         2. Fallback to Zyte API with ONLY 1 retry
         """
 
-        headers = headers or {'User-Agent': "Mozilla/5.0"}
+        # headers = headers or {'User-Agent': "Mozilla/5.0"}
+        headers = headers or {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        }
 
         # ----------------------------
         # 1. Regular requests retries
         # ----------------------------
         for attempt in range(retries):
             try:
-                logger.info(f"ℹ️ Attempt {attempt + 1}/{retries} (regular request): {url}")
+                logger.info(
+                    f"ℹ️ Attempt {attempt + 1}/{retries} (regular request): {url}"
+                )
 
                 # Disable SSL verification for problematic sites
                 verify_ssl = CONFIG.get("verify_ssl", True)
@@ -680,7 +836,6 @@ class Core:
                     timeout=timeout,
                     stream=stream,
                     verify=verify_ssl,
-                    impersonate="chrome110"
                 )
 
                 # response.encoding = response.apparent_encoding or "utf-8"
@@ -694,7 +849,7 @@ class Core:
 
             except RequestsError as e:
                 if attempt < retries - 1:
-                    wait_time = 2 ** attempt
+                    wait_time = 2**attempt
                     logger.warning(
                         f"⚠️ Regular request failed ({attempt + 1}/{retries}) for {url}. "
                         f"Retrying in {wait_time}s..."
@@ -724,9 +879,7 @@ class Core:
 
             api_response.raise_for_status()
 
-            http_response_body = b64decode(
-                api_response.json()["httpResponseBody"]
-            )
+            http_response_body = b64decode(api_response.json()["httpResponseBody"])
 
             logger.info(f"✅ Success (Zyte API): {url}")
             return http_response_body
@@ -735,7 +888,9 @@ class Core:
             logger.error(f"❌ Zyte API failed for {url}: {e}")
             return None
 
-    def fetch_html(url: str, runner="request", max_retries=3, selector = None) -> str | None:
+    def fetch_html(
+        url: str, runner="request", max_retries=3, selector=None
+    ) -> str | None:
         try:
             logger.info("Loading page...")
 
@@ -767,17 +922,16 @@ class Core:
         if not text:
             return text
         try:
-            return text.encode('latin1').decode('utf-8')
+            return text.encode("latin1").decode("utf-8")
         except Exception:
             return text
 
     def prepare_markdown_file(structure_data, structure_folder, filename="overview.md"):
         if not structure_data or "overview" not in structure_data:
             logger.warning(f"Missing '{structure_folder}.overview' in input data.")
-            return 
+            return
 
         overview_list = structure_data["overview"]
-
 
         if not isinstance(overview_list, list):
             raise TypeError("md_list must be a list of strings")
@@ -802,7 +956,7 @@ class Core:
         structure_folder="images",
         max_retries=3,
         retry_delay=2,
-        rename_by_detected_type=False
+        rename_by_detected_type=False,
     ):
         REQUIRED_KEYS = ["language", "description", "version", "date"]
 
@@ -852,7 +1006,9 @@ class Core:
             while attempt < max_retries and not success:
                 attempt += 1
                 try:
-                    logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
+                    logger.info(
+                        f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ..."
+                    )
                     response = Core.get_requests(url, retries=max_retries, stream=True)
 
                     if not response or response.status_code != 200:
@@ -894,27 +1050,35 @@ class Core:
                         f.write(file_content)
 
                     size = os.path.getsize(save_path)
-                    file_path = os.path.join(structure_folder, final_name).replace("\\", "/")
+                    file_path = os.path.join(structure_folder, final_name).replace(
+                        "\\", "/"
+                    )
 
                     # ✅ Update metadata entry
                     item["file_path"] = file_path
                     item["name"] = final_name
 
                     success = True
-                    logger.info(f"✅ Saved: {save_path} ({size} bytes), detected type: {detected_ext}")
+                    logger.info(
+                        f"✅ Saved: {save_path} ({size} bytes), detected type: {detected_ext}"
+                    )
 
                 except Exception as e:
                     logger.error(f"❌ Attempt {attempt} failed for {final_name}: {e}")
                     if attempt < max_retries:
                         time.sleep(retry_delay)
                     else:
-                        logger.error(f"🚫 Giving up after {max_retries} attempts for {final_name}")
+                        logger.error(
+                            f"🚫 Giving up after {max_retries} attempts for {final_name}"
+                        )
                         item["file_path"] = "Failed to download"
 
                 finally:
                     if success and callable(on_file_downloaded):
                         try:
-                            updated_item = on_file_downloaded(item, file_content, detected_ext)
+                            updated_item = on_file_downloaded(
+                                item, file_content, detected_ext
+                            )
                             if isinstance(updated_item, dict):
                                 item.update(updated_item)
                         except Exception as cb_err:
@@ -929,7 +1093,7 @@ class Core:
         structure_folder="documentation",
         max_retries=3,
         retry_delay=2,
-        rename_by_detected_type=False
+        rename_by_detected_type=False,
     ):
         REQUIRED_KEYS = ["language", "description", "version", "date"]
 
@@ -978,7 +1142,9 @@ class Core:
             while attempt < max_retries and not success:
                 attempt += 1
                 try:
-                    logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
+                    logger.info(
+                        f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ..."
+                    )
                     response = requests.get(url, timeout=60)
                     response.raise_for_status()
                     file_content = response.content
@@ -1006,21 +1172,27 @@ class Core:
                         f.write(file_content)
 
                     size = os.path.getsize(save_path)
-                    file_path = os.path.join(structure_folder, final_name).replace("\\", "/")
+                    file_path = os.path.join(structure_folder, final_name).replace(
+                        "\\", "/"
+                    )
 
                     # ✅ Update metadata entry with final name and path
                     item["file_path"] = file_path
                     item["name"] = final_name
 
                     success = True
-                    logger.info(f"✅ Saved: {save_path} ({size} bytes), detected type: {detected_ext}")
+                    logger.info(
+                        f"✅ Saved: {save_path} ({size} bytes), detected type: {detected_ext}"
+                    )
 
                 except Exception as e:
                     logger.error(f"❌ Attempt {attempt} failed for {final_name}: {e}")
                     if attempt < max_retries:
                         time.sleep(retry_delay)
                     else:
-                        logger.error(f"🚫 Giving up after {max_retries} attempts for {final_name}")
+                        logger.error(
+                            f"🚫 Giving up after {max_retries} attempts for {final_name}"
+                        )
                         status = getattr(response, "status_code", None)
                         if status:
                             item["file_path"] = f"Failed to download : {status}"
@@ -1031,14 +1203,18 @@ class Core:
                     # ✅ Call callback only if file was successfully saved
                     if success and callable(on_file_downloaded):
                         try:
-                            updated_item = on_file_downloaded(item, file_content, detected_ext)
+                            updated_item = on_file_downloaded(
+                                item, file_content, detected_ext
+                            )
                             if isinstance(updated_item, dict):
                                 item.update(updated_item)
                         except Exception as cb_err:
                             logger.error(f"⚠️ Callback error for {final_name}: {cb_err}")
 
         # ✅ Save metadata JSON file
-        Core.save_metadata(metadata_list, structure_folder, "block_diagram_mappings.json")
+        Core.save_metadata(
+            metadata_list, structure_folder, "block_diagram_mappings.json"
+        )
         return True
 
     def get_filename_from_response(response):
@@ -1057,13 +1233,13 @@ class Core:
         structure_folder="documentation",
         max_retries=3,
         retry_delay=2,
-        rename_by_detected_type=False
+        rename_by_detected_type=False,
     ):
         REQUIRED_KEYS = ["language", "description", "version", "date"]
 
         if not structure_data or "metadata" not in structure_data:
             logger.warning(f"Missing '{structure_folder}.metadata' in input data.")
-            return 
+            return
 
         metadata_list = structure_data["metadata"]
         on_file_downloaded = structure_data.get("callback", None)
@@ -1106,7 +1282,9 @@ class Core:
             while attempt < max_retries and not success:
                 attempt += 1
                 try:
-                    logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
+                    logger.info(
+                        f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ..."
+                    )
                     response = Core.get_requests(url, retries=max_retries, stream=True)
                     response.raise_for_status()
                     file_content = response.content
@@ -1154,17 +1332,23 @@ class Core:
 
                     # ✅ Update metadata fields
                     item["file_path"] = file_path
-                    item["name"] = final_name  # ensure metadata name matches actual file name
+                    item["name"] = (
+                        final_name  # ensure metadata name matches actual file name
+                    )
 
                     success = True
-                    logger.info(f"✅ Saved: {save_path} ({size} bytes), detected type: {detected_ext}")
+                    logger.info(
+                        f"✅ Saved: {save_path} ({size} bytes), detected type: {detected_ext}"
+                    )
 
                 except Exception as e:
                     logger.error(f"❌ Attempt {attempt} failed for {final_name}: {e}")
                     if attempt < max_retries:
                         time.sleep(retry_delay)
                     else:
-                        logger.error(f"🚫 Giving up after {max_retries} attempts for {final_name}")
+                        logger.error(
+                            f"🚫 Giving up after {max_retries} attempts for {final_name}"
+                        )
                         status = getattr(response, "status_code", None)
                         if status:
                             item["file_path"] = f"Failed to download : {status}"
@@ -1174,7 +1358,9 @@ class Core:
                     # ✅ Call callback only if file was successfully saved
                     if success and callable(on_file_downloaded):
                         try:
-                            updated_item = on_file_downloaded(item, file_content, detected_ext)
+                            updated_item = on_file_downloaded(
+                                item, file_content, detected_ext
+                            )
                             if isinstance(updated_item, dict):
                                 item.update(updated_item)
                         except Exception as cb_err:
@@ -1184,7 +1370,9 @@ class Core:
         Core.save_metadata(metadata_list, structure_folder)
         return True
 
-    def save_metadata(metadata_list, structure_folder="documentation", filename="metadata.json"):
+    def save_metadata(
+        metadata_list, structure_folder="documentation", filename="metadata.json"
+    ):
         if not isinstance(metadata_list, list):
             logger.warning("metadata_list must be a list of objects")
             return
@@ -1198,7 +1386,11 @@ class Core:
             pdf_path = item.get("file_path")
 
             # Try reading details from PDF properties if file exists
-            if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
+            if (
+                pdf_path
+                and os.path.exists(pdf_path)
+                and pdf_path.lower().endswith(".pdf")
+            ):
                 try:
                     reader = PdfReader(pdf_path)
                     doc_info = reader.metadata  # PyPDF2 3.x compatible
@@ -1214,7 +1406,9 @@ class Core:
                             raw_date = doc_info.get("/CreationDate")
                             # Convert format like "D:20240506121000Z" -> "2024-05-06"
                             if raw_date.startswith("D:") and len(raw_date) >= 10:
-                                item["date"] = f"{raw_date[2:6]}-{raw_date[6:8]}-{raw_date[8:10]}"
+                                item["date"] = (
+                                    f"{raw_date[2:6]}-{raw_date[6:8]}-{raw_date[8:10]}"
+                                )
                             else:
                                 item["date"] = raw_date
 
@@ -1222,7 +1416,9 @@ class Core:
                             item["language"] = doc_info.get("/Language")
 
                 except Exception as e:
-                    logger.warning(f"Failed to extract PDF metadata for {pdf_path}: {e}")
+                    logger.warning(
+                        f"Failed to extract PDF metadata for {pdf_path}: {e}"
+                    )
 
             updated_metadata.append(item)
 
@@ -1236,10 +1432,12 @@ class Core:
         logger.info(f"✅ Metadata saved at: {save_path}")
         return save_path
 
-    def prepare_products_table(structure_data, structure_folder="tables", filename="products.json"):
+    def prepare_products_table(
+        structure_data, structure_folder="tables", filename="products.json"
+    ):
         if not structure_data or "products" not in structure_data:
             logger.warning(f"Missing '{structure_folder}.products' in input data.")
-            return 
+            return
 
         products = structure_data["products"]
 
@@ -1347,7 +1545,6 @@ class Core:
 
         return section_header + markdown_text.strip() + "\n"
 
-
     def _html_to_str(html):
         if not html:
             return ""
@@ -1357,11 +1554,13 @@ class Core:
             return str(html)
         return str(html)
 
-    def clean_html_spaces(text: str, full_clean = False) -> str:
+    def clean_html_spaces(text: str, full_clean=False) -> str:
         if not text:
             return ""
 
-        text = text.replace("&nbsp;", " ").replace("\xa0", " ").replace("\u00a0", " ")   # extra safety
+        text = (
+            text.replace("&nbsp;", " ").replace("\xa0", " ").replace("\u00a0", " ")
+        )  # extra safety
         return text if not full_clean else re.sub(r"\s+", " ", text).strip()
 
     def fix_lazy_loaded_images(soup):
@@ -1373,6 +1572,7 @@ class Core:
                 img["src"] = real_src
 
         return soup
+
 
 def init(url, update_prices_only=False):
     crawl_array = {}
@@ -1390,18 +1590,24 @@ def init(url, update_prices_only=False):
         return
 
     # Category page (no product listings)
-    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
+    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(
+        SITE_CONFIG["category"]["main_selector"]
+    ):
         crawl_array["page_type"] = "category"
         crawl_array["markdowns"] = Category.markdown(soup, url)
 
     # Group / Sub-category (product listings available)
-    elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(SITE_CONFIG["group"]["main_selector"]):
+    elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(
+        SITE_CONFIG["group"]["main_selector"]
+    ):
         crawl_array["page_type"] = "group"
         crawl_array["markdowns"] = Group.markdown(soup, url)
         crawl_array["tables"] = Group.tables(soup, url)
 
     # Product page (detailed specs)
-    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
+    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(
+        SITE_CONFIG["part"]["main_selector"]
+    ):
         crawl_array["page_type"] = "product"
         crawl_array["markdowns"] = Product.markdown(soup, url)
         crawl_array["tables"] = Product.tables(soup, url)
@@ -1411,11 +1617,16 @@ def init(url, update_prices_only=False):
 
     return crawl_array
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Array-driven scraper")
-    parser.add_argument("--url", required=True, help="URL or local HTML file path to scrape")
+    parser.add_argument(
+        "--url", required=True, help="URL or local HTML file path to scrape"
+    )
     parser.add_argument("--out", required=True, help="Output directory")
-    parser.add_argument("--update-only-prices",action="store_true",help="Only update prices")
+    parser.add_argument(
+        "--update-only-prices", action="store_true", help="Only update prices"
+    )
     args = parser.parse_args()
 
     crawl_array = init(args.url, args.update_only_prices)
@@ -1425,3 +1636,7 @@ if __name__ == "__main__":
     else:
         Core.init(args.out, crawl_array, args.update_only_prices)
         logger.info("Done")
+
+
+if __name__ == "__main__":
+    main()
