@@ -5,7 +5,6 @@ from curl_cffi.requests import RequestsError
 from base64 import b64decode
 import filetype
 import json
-import argparse
 import sys
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
