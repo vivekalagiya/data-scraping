@@ -1,0 +1,20 @@
+get topic
+python3 get_structure.py --out output/topic_structure.json
+python3 get_structure.py --out output/topic_structure.json --limit 1,2,2
+
+full crawl:
+python3 batch.py --structure_file output/topic_structure.json --group_index 0 --group_count 1 --output output
+
+validation command:
+python3 validate_topic_structure.py
+python3 topic_structure_count.py
+
+python3 crawl.py --url "" --out output/Category
+python3 crawl.py --url "" --out output/Part
+
+Category Url : "https://en.connfly.com/newproducts/"
+Part Url: "https://en.connfly.com/list_56/1375.html"
+
+
+Category Command:python3 crawl.py --url "https://en.connfly.com/newproducts/" --out output/Category
+Part Command:python3 crawl.py --url "https://en.connfly.com/list_56/1375.html" --out output/Part
