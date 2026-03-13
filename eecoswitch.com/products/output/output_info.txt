@@ -1,0 +1,7 @@
+Category and part scraping completed for eecoswitch.com
+
+Output contains:
+- markdowns
+- tables/metadata.json
+- category data
+- part data

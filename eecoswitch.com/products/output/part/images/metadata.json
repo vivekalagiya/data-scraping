@@ -1,0 +1,29 @@
+[
+    {
+        "name": "product.png",
+        "url": "https://www.eecoswitch.com/wp-content/uploads/2011/08/2300_specs.png",
+        "file_path": "output/part/images/product.png",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "2300-final-285x200(1).gif",
+        "url": "https://www.eecoswitch.com/wp-content/uploads/2011/08/2300-final-285x200.gif",
+        "file_path": "output/part/images/2300-final-285x200(1).gif",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "File_Pdf(1).png",
+        "url": "https://www.eecoswitch.com/wp-content/themes/main/images/assets/icons/File_Pdf.png",
+        "file_path": "output/part/images/File_Pdf(1).png",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    }
+]
