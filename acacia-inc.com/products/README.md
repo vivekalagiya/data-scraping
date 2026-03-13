@@ -92,6 +92,22 @@ output/part/
     "pdf_filename": null
   }
 }
+
+### metadata.json Format
+```json
+[
+ {
+   "name": "datasheet.pdf",
+   "file_path": "path/to/file.pdf",
+   "version": "1.0.0",
+   "date": "2021-01-01",
+   "url": "https://example.com/file.pdf",
+   "language": "english",
+   "description": null
+ }
+]
+```
+
 ```
 
 ## How It Works
