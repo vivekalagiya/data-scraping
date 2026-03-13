@@ -1,0 +1,29 @@
+[
+    {
+        "name": "product.jpeg",
+        "url": "https://www.vxipower.com/media/view/2016/12/vx010p1_1_-1_160.jpg",
+        "file_path": "output/part/images/product.jpeg",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "excell_170(1).jpg",
+        "url": "https://www.vxipower.com/media/view/2016/12/excell_170.jpg",
+        "file_path": "output/part/images/excell_170(1).jpg",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "lincat_2__171(1).jpg",
+        "url": "https://www.vxipower.com/media/view/2016/12/lincat_2__171.jpg",
+        "file_path": "output/part/images/lincat_2__171(1).jpg",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    }
+]
