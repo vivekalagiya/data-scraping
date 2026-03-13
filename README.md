@@ -1,3 +1,13 @@
+Web Crawler Assignment
+
+Author: Jay Alpeshbhai Chavda
+
+Features:
+- Product crawler
+- Category crawler
+- Downloads 3 images
+- Generates markdown documentation
+
 Python Web Data Extraction Tool
 
 Install dependencies:
