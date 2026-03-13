@@ -1,0 +1,149 @@
+================================================================================
+PROJECT REPORT: Acacia Web Data Scraper Refinement
+================================================================================
+
+1. EXECUTIVE SUMMARY
+--------------------
+The objective of this task was to adapt a base Python web scraper (`crawl.py`) to extract structured product data from `acacia-inc.com`. The scraper needed to dynamically handle both Category Pages (listing multiple products) and Product Part Pages (detailed specifications). 
+
+The generated outputs had to strictly conform to a predefined folder structure (9 subdirectories: images, tables, markdowns, etc.) and specific JSON schema definitions for `products.json` and `metadata.json`.
+
+Challenges overcome included handling single-page product listings (no pagination), extracting data from lazy-loaded 'data-src' images, deriving missing SKUs from URL slugs, and ensuring exact key/value formatting in the JSON exports. All changes were made exclusively in the `crawl.py` file.
+
+2. STEP-BY-STEP IMPLEMENTATION & CODE CHANGES IN `crawl.py`
+-----------------------------------------------------------
+
+Step 1: Identifying Page Types and Domesticating Selectors
+----------------------------------------------------------
+**Goal**: Point the scraper to the correct HTML elements on `acacia-inc.com` instead of the old target site.
+**Code Changes (File: `crawl.py`, Lines 33-89)**: 
+Updated the global `SITE_CONFIG` dictionary at the top of the file.
+```python
+# We updated the CSS selectors to match Acacia's DOM structure. 
+# Category pages use '.split-products', and Product pages use 'main.content-main'.
+
+    "group": {
+        "main_selector": ".split-products",
+        "product_container": ".row.grid-autofit > div", # The wrapper for product cards
+        "products": {
+            "name": ".aside h3",                        # Extracts product name
+            "product_page_link": "a.btn.btn-gray::attr(href)",
+            "image_url": ".figure img::attr(src)",
+            "description": ".aside p"                   # Extracts short description
+        }
+    },
+    ...
+```
+
+Step 2: Correcting Category Page Extraction (Group.tables)
+----------------------------------------------------------
+**Goal**: The original script assumed products were paginated and fell into an infinite loop. Acacia lists everything on one page.
+**Code Changes (File: `crawl.py`, Lines 196-296)**: 
+Rewrote the `Group.tables()` function. Removed pagination loops and added fallback logic to derive missing SKUs from the URL slugs.
+```python
+# Inside Group.tables()
+
+        # Iterate through the grid cards found via SITE_CONFIG
+        if cards:
+            for div in cards:
+                ...
+                # Acacia doesn't provide explicit SKUs on category pages. 
+                # We derive it from the end of the URL slug (e.g., /product/ac1200/ -> AC1200)
+                sku = extract_value(div, SITE_CONFIG["group"]["products"]["sku"])
+                if not sku and prod_url:
+                    slug_parts = [p for p in urlparse(prod_url).path.strip("/").split("/") if p]
+                    sku = slug_parts[-1].upper() if slug_parts else None
+
+                ...
+                # Skip invalid base64 image placeholders
+                if img_src and img_src.startswith("data:"):
+                    img_src = None
+```
+
+Step 3: Extracting Deep Product Data (Product.tables)
+-----------------------------------------------------
+**Goal**: Pull comprehensive details (features, resources, PDFs) from individual product pages.
+**Code Changes (File: `crawl.py`, Lines 332-432)**: 
+Rewrote the `Product.tables()` function extraction logic to target specific headers (`h1`, `h2`) and animated containers (`.show-animate`). Removed all old KEC-specific accordion parsing code.
+```python
+# Inside Product.tables()
+
+        # Features were hidden inside ".show-animate" blocks with <h3> titles and <p> bodies.
+        features = []
+        for container in soup.select(".show-animate"):
+            for h3 in container.select("h3"):
+                title = h3.get_text(strip=True)
+                sibling = h3.find_next_sibling("p")
+                body = sibling.get_text(strip=True) if sibling else ""
+                if title:
+                    features.append(f"{title}: {body}" if body else title)
+        if features:
+            product_data["features"] = features # Saved using strict lowercase key
+
+        ...
+        # Related Resources and PDF links were inside ".articles-list2"
+        resources = []
+        for a in soup.select(".articles-list2 .box, .articles-list2 a"):
+            href = a.get("href", "").strip()
+            name = a.get_text(" ", strip=True).replace("\n", " ")
+            if href:
+                resources.append({"name": name, "url": href})
+```
+
+Step 4: Fixing Lazy-Loaded Images
+---------------------------------
+**Goal**: Acacia uses lazy loading, so the standard `src` attribute often holds a tiny blank placeholder while the real image is in `data-src` or `data-lazy-src`.
+**Code Changes (File: `crawl.py`, Lines 1340-1360 for `Core.fix_lazy_loaded_images()` and Lines 438-466 for `Product.images()`)**: 
+Updated the image extraction priority sequence inside `Product.images()` and the HTML dom modification algorithm in `Core.fix_lazy_loaded_images()`.
+```python
+# Inside Product.images() and Core.fix_lazy_loaded_images()
+
+        for img in soup.find_all("img"):
+            # Prioritize standard lazy-load attributes over the default src
+            real_src = img.get("data-src") or img.get("data-lazy-src") or img.get("data-amsrc")
+            if real_src:
+                img["src"] = real_src
+
+            # Reject inline base64 images that bypass downloaders
+            if real_src and real_src.startswith("data:"):
+                continue
+```
+
+Step 5: Formatting Output Schemas (`products.json` & `metadata.json`)
+---------------------------------------------------------------------
+**Goal**: The required output formats were extremely strict. `products.json` keys had to be specifically cased, and `metadata.json` had to contain an exact 7-field object, avoiding empty arrays in unused folders.
+**Code Changes (File: `crawl.py`, Lines 1263-1310 for `prepare_products_table()` and Lines 600-640 for `create_output_folders()`)**: 
+Updated dictionary keys in `Product.tables()` and `Group.tables()` to be strictly lowercase (e.g. `description`, `features`). Updated `prepare_products_table()` to loop through the generated products and output them into an equivalent `metadata.json` mapping format using forward slashes. Removed the unconditional default generation of empty `[ ]` metadata files in `create_output_folders()`.
+```python
+# Inside prepare_products_table()
+
+            # The specs strictly demanded forward-slashes in file paths
+            forward_slash_path = save_path.replace("\\", "/")
+            
+            # Populate our tables/metadata.json to document the products.json file
+            metadata_list = []
+            for key, prod in products_dict.items():
+                metadata_list.append({
+                    "name": prod.get("name") or key,
+                    "file_path": forward_slash_path,
+                    "version": None,
+                    "date": None,
+                    "url": prod.get("product_page_link"),
+                    "language": None,
+                    "description": prod.get("description")
+                })
+
+            ...
+# Inside create_output_folders()
+        # Removed unconditional creation of `metadata.json = []` across all 9 folders.
+        # The script now ONLY generates a metadata.json if real valid files are downloaded 
+        # to that directory (e.g., images, block_diagrams, tables), ensuring no "empty" spam.
+```
+
+3. FINAL RESULTS
+----------------
+The bot successfully traverses both category arrays and deep product pages:
+- **Category Run**: Successfully extracts product names, descriptions, main images, and URLs into `output/category/tables/products.json`.
+- **Part Run (e.g., AC1200)**: Collects documentation, feature lists, images (saving the primary as `product.png`), related resource links, and dynamically builds compliant `metadata.json` mapping files using PyPDF2 metadata rules.
+
+All changes have been successfully committed to GitHub under the `acacia-inc.com` branch.
