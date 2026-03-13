@@ -92,7 +92,7 @@ output/part/
     "pdf_filename": null
   }
 }
-
+```
 ### metadata.json Format
 ```json
 [
@@ -108,7 +108,7 @@ output/part/
 ]
 ```
 
-```
+
 
 ## How It Works
 
