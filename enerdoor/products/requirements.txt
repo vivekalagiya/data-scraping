@@ -1,0 +1,6 @@
+curl_cffi
+beautifulsoup4
+markdownify
+filetype
+PyPDF2
+pillow
