@@ -24,65 +24,57 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CONFIG = {
-    "verify_ssl": True  # Disable SSL verification for problematic sites
+    "verify_ssl": False  # Disable SSL verification for problematic sites
 }
 
-ZYTE_API_KEY = os.getenv("ZYTE_API_KEY")  # set this in your environment
+ZYTE_API_KEY = "" # set this in your environment
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 SITE_CONFIG = {
     "category": {
-        "main_selector": ".category-list",
-        "markdown": [".category-list"],
+        "main_selector": None,
+        "markdown": ["main"],
         "documentation": [],
     },
 
     "group": {
-        "main_selector": ".search-product-list",
-        "product_container": ".product-list-item",
-        "markdown": ["#family-page h1"],
+        "main_selector": "#maincontent, .category-image-grid",
+        "product_container": ".category-image-grid__item, .product-item",
+        "markdown": ["main"],
         "documentation": [],
         "products": {
-            "name": ".product-title span",
-            "sku": ".product-number span",
-            "product_page_link": "a.product-title::attr(href)",
+            "name": "h3, .product-item-link",
+            "sku": "",
+            "product_page_link": "a.category-image-grid__mobile-link, a.product-item-link",
             "pdf_link": "",
             "pdf_filename": "",
             "image_url": "img::attr(src)",
-            "pricing": ".current-price div",
+            "pricing": "",
             "description": ""
         }
     },
 
     "part": {
-        "main_selector": ".product-details",
-        "markdown": [".product-details", ".marketing-area > div"],
-        "images": [".product-image-countainer .product-image-container img"],
-        "documentation": ["#accordion a[href]"],
+        "main_selector": "#overview, #specifications, .component-specifications-a",
+        "markdown": ["#overview"],
+        "images": ["img.gallery-image", "img.product-image", "meta[property='og:image']", "img.hero"],
+        "documentation": ["a[href$='.pdf']"],
         "block_diagrams": [],
         "design_resources": [],
         "software_tools": [],
         "products": {
-            "name": ".product-description",
+            "name": "h1",
             "sku": "h1",
             "product_page_link": "",
-            "pdf_link": "",
+            "pdf_link": "a[href$='.pdf']::attr(href)",
             "pdf_filename": "",
-            "image_url": ".product-image-countainer .product-image-container img::attr(src)",
-            "pricing": ".current-price div",
+            "image_url": "meta[property='og:image']::attr(content)",
+            "pricing": ".price",
             "description": "",
             "features": "",
             "application": "",
             "specification": "",
             "variants": {
-                "name": "",
-                "sku": "",
-                "product_page_link": "",
-                "pdf_link": "",
-                "pdf_filename": "",
-                "image_url": "",
-                "pricing": "",
-                "description": ""
             }
         }
     }
@@ -164,32 +156,36 @@ class Group:
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        page_num = 0
-        visited = set()
-        while True:
-            page_url = url + f"?PageNumber={page_num}&PageSize=100"
-            if page_url in visited:
-                break
-            visited.add(page_url)
+        html = Core.fetch_html(url, "request")
+        if not html:
+            return tables
+        soup_page = BeautifulSoup(html, "html.parser")
+        Core.fix_lazy_loaded_images(soup_page)
 
-            html = Core.fetch_html(page_url, "request")
-            if not html:
-                break
-            soup = BeautifulSoup(html, "html.parser")
-            Core.fix_lazy_loaded_images(soup)
+        container = SITE_CONFIG["group"].get("product_container")
+        
+        if soup_page.select(container):
+            for div in soup_page.select(container):
+                prod_url = div.get("href")
 
-            container = SITE_CONFIG["group"].get("product_container")
-            
-            if not soup.select(container):
-                break
+                # Look specifically for the mobile link / CTA links inside the div if the div itself isn't the primary link
+                if not prod_url:
+                    cta_link = div.select_one("a.category-image-grid__mobile-link, a.product-item-link")
+                    if cta_link and cta_link.get("href"):
+                         prod_url = cta_link.get("href")
 
-            for div in soup.select(container):
-                prod_url = extract_value(div, SITE_CONFIG["group"]["products"]["product_page_link"])
-                if prod_url and not prod_url.startswith("http"):
+                if not prod_url:
+                    continue
+
+                if not prod_url.startswith("http"):
                     prod_url = urljoin(base_url, prod_url)
+                
                 sku = extract_value(div, SITE_CONFIG["group"]["products"]["sku"])
-
                 name = extract_value(div, SITE_CONFIG["group"]["products"]["name"])
+                if not name and div.text:
+                    name = div.text.strip()
+                if not sku:
+                    sku = name
 
                 price = extract_value(div, SITE_CONFIG["group"]["products"]["pricing"])
 
@@ -211,7 +207,6 @@ class Group:
                 }
 
                 products.append(product)
-            page_num += 1
 
         tables["products"] = products
         return tables
@@ -268,14 +263,25 @@ class Product:
         pdf_links = []
         pdf_names = []
 
-        for a in soup.select(SITE_CONFIG["part"]["products"]["pdf_link"]):
-            href = a.get("href")
-            if not href:
-                continue
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-            pdf_url = href.strip()
-            pdf_links.append(pdf_url)
-            pdf_names.append(pdf_url.split("/")[-1])
+        pdf_sel = SITE_CONFIG["part"]["products"]["pdf_link"]
+        if "::attr(" in pdf_sel:
+            pdf_sel = pdf_sel.split("::attr(")[0].strip()
+
+        if pdf_sel:
+            for a in soup.select(pdf_sel):
+                href = a.get("href")
+                if not href:
+                    continue
+
+                pdf_url = href.strip()
+                if not pdf_url.startswith("http"):
+                    pdf_url = urljoin(base_url, pdf_url)
+                
+                pdf_links.append(pdf_url)
+                pdf_names.append(pdf_url.split("/")[-1])
 
         if pdf_links:
             if len(pdf_links) == 1:
@@ -286,136 +292,79 @@ class Product:
                 product_data["pdf_filename"] = pdf_names
 
         # -------------------------------
-        # Custom Sections
+        # Custom Sections for Elotouch
         # -------------------------------
-        lead_time = soup.select_one("strong p")
-        if lead_time:
-            product_data["lead_time"] = lead_time.get_text(strip=True).replace("Standard Lead Time:", "").strip()
+        
+        # 1. Overview / Description
+        overview_section = soup.select_one("#overview, .component-overview-a")
+        if overview_section:
+            # Try to grab paragraphs
+            ps = overview_section.select("p")
+            if ps:
+                text = "\n".join([p.get_text(" ", strip=True) for p in ps])
+                product_data["Description"] = text
+            else:
+                product_data["Description"] = overview_section.get_text(" ", strip=True)
 
+        # 2. Specifications Table
+        spec_section = soup.select_one("#specifications, .component-specifications-a")
+        if spec_section:
+            specs = {}
+            for row in spec_section.select(".cmp-specifications-items__wrapper"):
+                key_el = row.select_one(".cmp-specifications-items__description")
+                val_el = row.select_one(".cmp-specifications-items__title")
+                if key_el and val_el:
+                    key = key_el.get_text(" ", strip=True)
+                    val = val_el.get_text(" ", strip=True)
+                    specs[key] = val
+                    
+            # Fallback checking for standard table rows
+            for tr in spec_section.select("tr"):
+                tds = tr.select("td, th")
+                if len(tds) >= 2:
+                    key = tds[0].get_text(" ", strip=True).replace(":", "")
+                    val = tds[1].get_text(" ", strip=True)
+                    specs[key] = val
+            
+            if specs:
+                product_data["Specifications"] = specs
 
-        pdf_links = []
-        pdf_filenames = []
-        accordion = soup.select_one("#accordion")
-        if accordion:
-            panels = accordion.select(".panel-heading a")
-            for panel in panels:
-                section_name = panel.get_text(" ", strip=True).replace("+", "").strip()
+        # 3. Resources (PDFs)
+        resources_section = soup.select_one("#resources, .component-resources-a")
+        if resources_section:
+            resources = []
+            for a in resources_section.select("a[href$='.pdf']"):
+                href = a["href"].strip()
+                name_el = a.select_one(".cmp-accordion-group-list__name, h4, span")
+                name = name_el.get_text(strip=True) if name_el else a.get_text(strip=True)
 
-                target_id = panel.get("href")
-                if not target_id:
-                    continue
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
 
-                target_id = panel.get("href")
-                if not target_id or not target_id.startswith("#"):
-                    continue
+                filename = href.split("/")[-1]
 
-                panel_id = target_id[1:]  # remove '#'
+                resources.append({
+                    "name": name or filename,
+                    "url": href
+                })
 
-                panel_div = accordion.find(id=panel_id)
-                if not panel_div:
-                    continue
-
-                body = panel_div.select_one(".panel-body")
-                if not body:
-                    continue
-
-                # ---------- Description (text + <br>)
-                if section_name == "Description":
-                    text = " ".join(body.stripped_strings)
-                    product_data["Description"] = text
-
-                # ---------- Specifications (table → dict)
-                elif section_name == "Specifications":
-                    specs = {}
-                    for tr in body.select("tr"):
-                        tds = tr.select("td")
-                        if len(tds) == 2:
-                            key = tds[0].get_text(strip=True).replace(":", "")
-                            value = tds[1].get_text(strip=True)
-                            specs[key] = value
-                    if specs:
-                        product_data["Specifications"] = specs
-
-                # ---------- Features & Benefits (ul → list)
-                elif section_name == "Features and Benefits":
-                    features = []
-
-                    # ---------- Case 1: Proper <li> list
-                    lis = body.select("li")
-                    if lis:
-                        for li in lis:
-                            text = " ".join(li.stripped_strings)
-                            if text:
-                                features.append(text)
-
-                    # ---------- Case 2: Broken <ul> without <li>
-                    elif body.select_one("ul"):
-                        ul_text = " ".join(body.select_one("ul").stripped_strings)
-
-                        # split on large whitespace blocks
-                        parts = [p.strip() for p in ul_text.split("  ") if p.strip()]
-                        features.extend(parts)
-
-                    # ---------- Case 3: Plain text
-                    else:
-                        text = " ".join(body.stripped_strings)
-                        if text:
-                            product_data["Features and Benefits"] = text
-                            continue
-
-                    if features:
-                        product_data["Features and Benefits"] = features if len(features) > 1 else features[0]
-
-                # ---------- Product Comprise of (ul → list)
-                elif section_name == "Product Comprise of":
-                    items = []
-                    for li in body.select("li"):
-                        text = li.get_text(strip=True)
-                        if text:
-                            items.append(text)
-                    if items:
-                        product_data["Product Comprise of"] = items
-
-                # ---------- Additional Resources (links)
-                elif section_name == "Additional Resources":
-                    resources = []
-
-                    for a in body.select("a[href]"):
-                        href = a["href"].strip()
-                        name = a.get_text(strip=True)
-
-                        # parse URL safely
-                        parsed = urlparse(href)
-                        path = parsed.path.lower()
-
-                        # only process PDFs
-                        if not path.endswith(".pdf"):
-                            continue
-
-                        filename = path.split("/")[-1]
-
-                        resources.append({
-                            "name": name,
-                            "url": href
-                        })
-
-                        # ONLY Data-Sheets go into pdf_link / pdf_filename
-                        if "data-sheet" not in name.lower():
-                            continue
-
+                # Check for "data sheet" or "spec sheet" to set main pdf_link
+                if name and ("data sheet" in name.lower() or "spec" in name.lower()):
+                    if href not in pdf_links:
                         pdf_links.append(href)
-                        pdf_filenames.append(filename)
+                        pdf_names.append(filename)
 
-                    if resources:
-                        product_data["Additional Resources"] = resources
+            if resources:
+                product_data["Additional Resources"] = resources
 
-            if pdf_links:
-                if len(pdf_links) == 1:
-                    product_data["pdf_link"] = pdf_links[0]
-                    product_data["pdf_filename"] = pdf_filenames[0]
-                else:
-                    product_data["pdf_link"] = pdf_links
-                    product_data["pdf_filename"] = pdf_filenames
+        # Set final PDF links
+        if pdf_links:
+            if len(pdf_links) == 1:
+                product_data["pdf_link"] = pdf_links[0]
+                product_data["pdf_filename"] = pdf_names[0]
+            else:
+                product_data["pdf_link"] = pdf_links
+                product_data["pdf_filename"] = pdf_names
 
         products.append(product_data)
         tables["products"] = products
@@ -432,12 +381,21 @@ class Product:
         markdown["overview"] = overview
         return markdown
 
-    def documentation(soup):
+    def documentation(soup, base_page_url):
         documents = {}
         metadata = []
+
+        parsed_base = urlparse(base_page_url)
+        base_url = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
         for sel in SITE_CONFIG["part"]["documentation"]:
             for a in soup.select(sel):
                 href = a["href"].strip()
+                if not href:
+                    continue
+
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
 
                 # parse URL safely
                 parsed = urlparse(href)
@@ -446,14 +404,12 @@ class Product:
                 # only process PDFs
                 if not path.endswith(".pdf"):
                     continue
-                url = a["href"].strip()
 
-                parsed = urlparse(url)
                 filename = parsed.path.split("/")[-1]
 
                 metadata.append({
                     "name": filename,
-                    "url": url,
+                    "url": href,
                     "file_path": "",
                     "version": None,
                     "date": None,
@@ -474,8 +430,15 @@ class Product:
 
         for sel in SITE_CONFIG["part"]["images"]:
             for img in soup.select(sel):
-                img_url = img.get("src")
-                if img_url and not img_url.startswith("http"):
+                if img.name == "meta":
+                    img_url = img.get("content")
+                else:
+                    img_url = img.get("src")
+
+                if not img_url:
+                    continue
+
+                if not img_url.startswith("http"):
                     img_url = urljoin(base_url, img_url)
                 if img_url.startswith("http://"):
                     img_url = img_url.replace("http://", "https://", 1)
@@ -674,6 +637,9 @@ class Core:
 
                 # Disable SSL verification for problematic sites
                 verify_ssl = CONFIG.get("verify_ssl", True)
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+                }
                 response = requests.get(
                     url,
                     headers=headers,
@@ -702,9 +668,9 @@ class Core:
                     time.sleep(wait_time)
                 else:
                     logger.error(
-                        f"❌ All regular request attempts failed for {url}. "
-                        f"Falling back to Zyte API..."
+                        f"❌ All regular request attempts failed for {url}"
                     )
+                    return None
 
         # ----------------------------
         # 2. Zyte fallback
@@ -855,14 +821,14 @@ class Core:
                     logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
                     response = Core.get_requests(url, retries=max_retries, stream=True)
 
-                    if not response or response.status_code != 200:
-                        raise Exception("Failed to download file")
+                    if not response:
+                        raise Exception("Failed to download file, response was None")
 
-                    # Properly read streamed content
-                    file_content = b"".join(response.iter_content(chunk_size=8192))
-
-                    if not file_content:
-                        raise Exception("Empty file content")
+                    if isinstance(response, bytes):
+                        file_content = response
+                    else:
+                        response.raise_for_status()
+                        file_content = b"".join(response.iter_content(chunk_size=8192))
 
                     # Detect file type
                     kind = filetype.guess(file_content)
@@ -1108,17 +1074,15 @@ class Core:
                 try:
                     logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
                     response = Core.get_requests(url, retries=max_retries, stream=True)
-                    response.raise_for_status()
-                    file_content = response.content
+                    
+                    if not response:
+                        raise Exception("Failed to download file, response was None")
 
-                    if not response or response.status_code != 200:
-                        raise Exception("Failed to download file")
-
-                    # Properly read streamed content
-                    file_content = b"".join(response.iter_content(chunk_size=8192))
-
-                    if not file_content:
-                        raise Exception("Empty file content")
+                    if isinstance(response, bytes):
+                        file_content = response
+                    else:
+                        response.raise_for_status()
+                        file_content = b"".join(response.iter_content(chunk_size=8192))
 
                     # 🔹 Prefer server-provided filename
                     server_filename = Core.get_filename_from_response(response)
@@ -1389,10 +1353,14 @@ def init(url, update_prices_only=False):
         logging.error(f"Failed to load URL/file {url}: {e}")
         return
 
-    # Category page (no product listings)
-    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
-        crawl_array["page_type"] = "category"
-        crawl_array["markdowns"] = Category.markdown(soup, url)
+    # Product page (detailed specs)
+    if SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
+        crawl_array["page_type"] = "product"
+        crawl_array["markdowns"] = Product.markdown(soup, url)
+        crawl_array["tables"] = Product.tables(soup, url)
+        if not update_prices_only:
+            crawl_array["documentation"] = Product.documentation(soup, url)
+            crawl_array["images"] = Product.images(soup, url)
 
     # Group / Sub-category (product listings available)
     elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(SITE_CONFIG["group"]["main_selector"]):
@@ -1400,14 +1368,10 @@ def init(url, update_prices_only=False):
         crawl_array["markdowns"] = Group.markdown(soup, url)
         crawl_array["tables"] = Group.tables(soup, url)
 
-    # Product page (detailed specs)
-    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
-        crawl_array["page_type"] = "product"
-        crawl_array["markdowns"] = Product.markdown(soup, url)
-        crawl_array["tables"] = Product.tables(soup, url)
-        if not update_prices_only:
-            crawl_array["documentation"] = Product.documentation(soup)
-            crawl_array["images"] = Product.images(soup, url)
+    # Category page (no product listings)
+    elif SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
+        crawl_array["page_type"] = "category"
+        crawl_array["markdowns"] = Category.markdown(soup, url)
 
     return crawl_array
 

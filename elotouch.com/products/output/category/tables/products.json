@@ -1,0 +1,38 @@
+{
+    "M51 Mobile Computer": {
+        "Product": "M51 Mobile Computer",
+        "name": "M51 Mobile Computer",
+        "product_page_link": "https://www.elotouch.com/mobile-computers-m51.html",
+        "pdf_link": null,
+        "pdf_filename": null,
+        "image_url": "https://www.elotouch.com/media/catalog/product/cache/db41e473e4fc7853520711e105f9a068/m/5/m51_standard_front_nologo_hero_gallery_update_1400x800.png",
+        "Pricing": null
+    },
+    "Elo Pay M60 Mobile POS Computer": {
+        "Product": "Elo Pay M60 Mobile POS Computer",
+        "name": "Elo Pay M60 Mobile POS Computer",
+        "product_page_link": "https://www.elotouch.com/mobile-computers-m60-pay.html",
+        "pdf_link": null,
+        "pdf_filename": null,
+        "image_url": "https://www.elotouch.com/media/catalog/product/cache/db41e473e4fc7853520711e105f9a068/m/6/m60_front_nologo_hero_gallery_update_1400x800.png",
+        "Pricing": null
+    },
+    "Elo Pay M100 Mobile POS Tablet": {
+        "Product": "Elo Pay M100 Mobile POS Tablet",
+        "name": "Elo Pay M100 Mobile POS Tablet",
+        "product_page_link": "https://www.elotouch.com/mobile-computers-elo-pay-m100-mobile-pos-tablet.html",
+        "pdf_link": null,
+        "pdf_filename": null,
+        "image_url": "https://www.elotouch.com/media/catalog/product/cache/db41e473e4fc7853520711e105f9a068/m/1/m100_front_nologo_hero_gallery_update_1400x800.png",
+        "Pricing": null
+    },
+    "M50 Mobile Computer": {
+        "Product": "M50 Mobile Computer",
+        "name": "M50 Mobile Computer",
+        "product_page_link": "https://www.elotouch.com/mobile-computers-m50.html",
+        "pdf_link": null,
+        "pdf_filename": null,
+        "image_url": "https://www.elotouch.com/media/catalog/product/cache/db41e473e4fc7853520711e105f9a068/r/e/renderset_m50_handheld_front_nologo_hero_gallery_update_1400x800.png",
+        "Pricing": null
+    }
+}
