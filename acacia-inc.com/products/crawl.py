@@ -602,35 +602,7 @@ class Core:
         for folder_path in dirs.values():
             os.makedirs(folder_path, exist_ok=True)
 
-        # File mapping rules
-        file_map = {
-            "tables": "metadata.json",
-            "markdowns": "overview.md",
-        }
-
-        if not update_prices_only:
-            file_map["images"] = "metadata.json"
-            file_map["documentation"] = "metadata.json"
-            file_map["block_diagrams"] = "block_diagram_mappings.json"
-            file_map["design_resources"] = "metadata.json"
-            file_map["software_tools"] = "metadata.json"
-            file_map["trainings"] = "metadata.json"
-            file_map["other"] = "metadata.json"
-
-        # Create blank files
-        for folder, file_name in file_map.items():
-            if folder in dirs:
-                file_path = os.path.join(dirs[folder], file_name)
-
-                # JSON files → write {}
-                if file_name.endswith(".json"):
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        json.dump([], f, indent=2)
-
-                # overview.md → blank file
-                else:
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write("")
+        return dirs
 
         return dirs
 
@@ -1061,8 +1033,9 @@ class Core:
                         except Exception as cb_err:
                             logger.error(f"⚠️ Callback error for {final_name}: {cb_err}")
 
-        # ✅ Save metadata JSON file
-        Core.save_metadata(metadata_list, structure_folder, "block_diagram_mappings.json")
+        # ✅ Save metadata JSON file only if not empty
+        if metadata_list:
+            Core.save_metadata(metadata_list, structure_folder, "block_diagram_mappings.json")
         return True
 
     def get_filename_from_response(response):
@@ -1303,6 +1276,27 @@ class Core:
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(products_dict, f, ensure_ascii=False, indent=4)
             logger.info(f"✅ Products JSON saved at: {save_path}")
+
+            # Also populate tables/metadata.json with product entries
+            metadata_list = []
+            # Ensure file_path uses forward slashes
+            forward_slash_path = save_path.replace("\\", "/")
+            
+            for key, prod in products_dict.items():
+                metadata_list.append({
+                    "name": prod.get("name") or key,
+                    "file_path": forward_slash_path,
+                    "version": None,
+                    "date": None,
+                    "url": prod.get("product_page_link"),
+                    "language": None,
+                    "description": prod.get("description")
+                })
+            metadata_path = os.path.join(structure_folder, "metadata.json")
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(metadata_list, f, ensure_ascii=False, indent=4)
+            logger.info(f"✅ Metadata saved at: {metadata_path}")
+
             return True
 
         except Exception as e:
