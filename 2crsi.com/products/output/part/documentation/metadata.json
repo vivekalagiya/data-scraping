@@ -1,0 +1,38 @@
+[
+    {
+        "name": "Datasheet_Mona_1.12GG_BRB-MA1-112GG-R010.pdf",
+        "url": "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Datasheets/Datasheet_Mona_1.12GG_BRB-MA1-112GG-R010.pdf",
+        "file_path": "output/part/documentation/Datasheet_Mona_1.12GG_BRB-MA1-112GG-R010.pdf",
+        "version": null,
+        "date": "2022-11-18",
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "MONA_1U_Series_User_Manual_AMD_V2.1.pdf",
+        "url": "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Manuals/MONA_1U_Series_User_Manual_AMD_V2.1.pdf",
+        "file_path": "Failed to download : 200",
+        "version": null,
+        "date": null,
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "Brochure_Mona_2023.pdf",
+        "url": "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Manuals/Brochure_Mona_2023.pdf",
+        "file_path": "output/part/documentation/Brochure_Mona_2023.pdf",
+        "version": null,
+        "date": "2024-02-12",
+        "language": null,
+        "description": null
+    },
+    {
+        "name": "Installation_Guide_for_MONA_1U_Series_Servers_V1.0.pdf",
+        "url": "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Manuals/Installation_Guide_for_MONA_1U_Series_Servers_V1.0.pdf",
+        "file_path": "output/part/documentation/Installation_Guide_for_MONA_1U_Series_Servers_V1.0.pdf",
+        "version": null,
+        "date": "2024-03-12",
+        "language": null,
+        "description": null
+    }
+]

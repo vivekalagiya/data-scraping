@@ -1,0 +1,21 @@
+{
+    "null": {
+        "Product": null,
+        "name": "Mona 1.12GG",
+        "Pricing": null,
+        "image_url": "",
+        "product_page_link": "https://2crsi.com/catalog/mona-1-12-gg-57421?category=17",
+        "pdf_link": [
+            "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Datasheets/Datasheet_Mona_1.12GG_BRB-MA1-112GG-R010.pdf",
+            "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Manuals/MONA_1U_Series_User_Manual_AMD_V2.1.pdf",
+            "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Manuals/Brochure_Mona_2023.pdf",
+            "https://pictures.2cr.si/Images_site_web_Odoo/Pages_produit/Mona/Manuals/Installation_Guide_for_MONA_1U_Series_Servers_V1.0.pdf"
+        ],
+        "pdf_filename": [
+            "Datasheet_Mona_1.12GG_BRB-MA1-112GG-R010.pdf",
+            "MONA_1U_Series_User_Manual_AMD_V2.1.pdf",
+            "Brochure_Mona_2023.pdf",
+            "Installation_Guide_for_MONA_1U_Series_Servers_V1.0.pdf"
+        ]
+    }
+}
