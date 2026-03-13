@@ -14,6 +14,8 @@ import random
 import re
 from urllib.parse import urljoin, urlparse, urlunparse, unquote, parse_qs
 from PyPDF2 import PdfReader
+import concurrent.futures
+import threading
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -138,6 +140,7 @@ def extract_value(element, selector):
     return tag.get_text(strip=True) if tag else None
 
 class Category:
+    @staticmethod
     def markdown(soup, url):
         markdown = {}
         overview = []
@@ -147,6 +150,7 @@ class Category:
         markdown['overview'] = overview
         return markdown
 
+    @staticmethod
     def documentation(soup):
         documents = {}
         metadata = []
@@ -182,6 +186,7 @@ class Category:
 
 # ---------- Group (Sub-category with product listings) ----------
 class Group:
+    @staticmethod
     def markdown(soup, url):
         markdown = {}
         overview = []
@@ -193,6 +198,7 @@ class Group:
         markdown["overview"] = overview
         return markdown
 
+    @staticmethod
     def tables(soup, url):
         """Extract product listing from a single category page (no pagination)."""
         tables = {}
@@ -296,6 +302,7 @@ class Group:
         return tables
 
 
+    @staticmethod
     def documentation(soup):
         documents = {}
         metadata = []
@@ -330,6 +337,7 @@ class Group:
         return documents
 
 class Product:
+    @staticmethod
     def tables(soup, url):
         tables = {}
         products = []
@@ -430,6 +438,7 @@ class Product:
         tables["products"] = products
         return tables
 
+    @staticmethod
     def markdown(soup, url):
 
         markdown = {}
@@ -442,6 +451,7 @@ class Product:
         markdown["overview"] = overview
         return markdown
 
+    @staticmethod
     def documentation(soup):
         documents = {}
         metadata = []
@@ -475,6 +485,7 @@ class Product:
             documents["metadata"] = metadata
         return documents
 
+    @staticmethod
     def images(soup, url):
         images = {}
         metadata = []
@@ -520,7 +531,8 @@ class Product:
         return images
 
 class Core:
-    def init(topic_folder, data, update_prices_only=False):
+    @staticmethod
+    def init(topic_folder, data, update_prices_only=False, parallel=False, max_workers=5):
         structure_folders = {
             "documentation": Core.download_general_files,
             "images": Core.download_images_files,
@@ -534,7 +546,7 @@ class Core:
         }
 
         page_type = data.get("page_type", None)
-        if page_type  == "product":
+        if page_type == "product":
             structure_folders_filter = structure_folders
         else:
             structure_folders_filter = {
@@ -562,12 +574,15 @@ class Core:
                             final_structure_folder,
                             "products.json")
                     else:
+                        # Download methods take more arguments
                         success = method(
                             data.get(folder),
                             final_structure_folder,
-                            3,  #max_retries
-                            2,  #retry_delay
-                            False #rename_by_detected_type
+                            3,  # max_retries
+                            2,  # retry_delay
+                            False, # rename_by_detected_type
+                            parallel=parallel,
+                            max_workers=max_workers
                         )
 
                     if success == True:
@@ -578,6 +593,7 @@ class Core:
                 except Exception as cb_err:
                     logger.error(f"⚠️ Callback error for {method}: {cb_err}")
 
+    @staticmethod
     def create_output_folders(out_dir, type_name=None, update_prices_only=False):
         os.makedirs(out_dir, exist_ok=True)
 
@@ -606,6 +622,7 @@ class Core:
 
         return dirs
 
+    @staticmethod
     def fetch_html_with_zyte(url: str, max_retries: int = 3, selector = None) -> str:
         if not ZYTE_API_KEY:
             logger.critical("ZYTE_API_KEY not set in environment")
@@ -652,6 +669,7 @@ class Core:
                     logger.error(f"❌ Failed after {max_retries} attempts for {url}")
                     raise
 
+    @staticmethod
     def get_requests(url, headers=None, timeout=60,stream=False, retries=3):
         """
         Fetch URL with retry logic:
@@ -731,6 +749,7 @@ class Core:
             logger.error(f"❌ Zyte API failed for {url}: {e}")
             return None
 
+    @staticmethod
     def fetch_html(url: str, runner="request", max_retries=3, selector = None) -> str | None:
         try:
             logger.info("Loading page...")
@@ -758,6 +777,7 @@ class Core:
             logger.error(f"Failed to load {url}: {e}")
             return None
 
+    @staticmethod
     def fix_encoding(text):
         """Fix mojibake (badly decoded UTF-8 as Latin-1)."""
         if not text:
@@ -767,6 +787,7 @@ class Core:
         except Exception:
             return text
 
+    @staticmethod
     def prepare_markdown_file(structure_data, structure_folder, filename="overview.md"):
         if not structure_data or "overview" not in structure_data:
             logger.warning(f"Missing '{structure_folder}.overview' in input data.")
@@ -793,12 +814,15 @@ class Core:
             logger.error(f"❌ Failed to create markdown: {e}")
             return False
 
+    @staticmethod
     def download_images_files(
         structure_data,
         structure_folder="images",
         max_retries=3,
         retry_delay=2,
-        rename_by_detected_type=False
+        rename_by_detected_type=False,
+        parallel=False,
+        max_workers=5
     ):
         REQUIRED_KEYS = ["language", "description", "version", "date"]
 
@@ -816,8 +840,10 @@ class Core:
         os.makedirs(structure_folder, exist_ok=True)
         seen_filenames = set()
         first_image_done = False
+        lock = threading.Lock()
 
-        for item in metadata_list:
+        def download_item(item):
+            nonlocal first_image_done
             name = item.get("name")
             url = item.get("url")
 
@@ -827,20 +853,20 @@ class Core:
 
             if not name or not url:
                 logger.warning(f"⚠️ Skipping entry with missing name or url: {item}")
-                continue
+                return
 
             base_name, orig_ext = os.path.splitext(name)
             final_name = name
-            save_path = os.path.join(structure_folder, final_name)
-
-            # 👇 Rename using (1), (2), (3)... if file already exists
-            counter = 1
-            while os.path.exists(save_path) or final_name in seen_filenames:
-                final_name = f"{base_name}({counter}){orig_ext}"
+            
+            with lock:
                 save_path = os.path.join(structure_folder, final_name)
-                counter += 1
-
-            # (do NOT add to seen yet — final_name may change below)
+                # 👇 Rename using (1), (2), (3)... if file already exists
+                counter = 1
+                while os.path.exists(save_path) or final_name in seen_filenames:
+                    final_name = f"{base_name}({counter}){orig_ext}"
+                    save_path = os.path.join(structure_folder, final_name)
+                    counter += 1
+                seen_filenames.add(final_name)
 
             # Retry loop
             attempt = 0
@@ -864,26 +890,34 @@ class Core:
                     kind = filetype.guess(file_content)
                     detected_ext = f".{kind.extension}" if kind else orig_ext.lower()
 
-                    # First image gets named "product.xxx"
-                    if not first_image_done:
-                        final_name = f"product{detected_ext}"
-                        save_path = os.path.join(structure_folder, final_name)
-                        first_image_done = True
+                    with lock:
+                        # First image gets named "product.xxx"
+                        if not first_image_done:
+                            new_final_name = f"product{detected_ext}"
+                            new_save_path = os.path.join(structure_folder, new_final_name)
+                            # Remove old name from seen and add new one
+                            seen_filenames.discard(final_name)
+                            seen_filenames.add(new_final_name)
+                            final_name = new_final_name
+                            save_path = new_save_path
+                            first_image_done = True
 
-                    # Optional renaming based on detected type
-                    elif rename_by_detected_type and detected_ext != orig_ext.lower():
-                        base_name_no_ext, _ = os.path.splitext(final_name)
-                        counter = 0
-                        final_name = f"{base_name_no_ext}{detected_ext}"
-                        save_path = os.path.join(structure_folder, final_name)
+                        # Optional renaming based on detected type
+                        elif rename_by_detected_type and detected_ext != orig_ext.lower():
+                            base_name_no_ext, _ = os.path.splitext(final_name)
+                            seen_filenames.discard(final_name)
+                            counter = 0
+                            temp_name = f"{base_name_no_ext}{detected_ext}"
+                            temp_path = os.path.join(structure_folder, temp_name)
 
-                        while os.path.exists(save_path):
-                            counter += 1
-                            final_name = f"{base_name_no_ext}({counter}){detected_ext}"
-                            save_path = os.path.join(structure_folder, final_name)
-
-                    # ✅ Add actual final name to seen set now
-                    seen_filenames.add(final_name)
+                            while os.path.exists(temp_path) or temp_name in seen_filenames:
+                                counter += 1
+                                temp_name = f"{base_name_no_ext}({counter}){detected_ext}"
+                                temp_path = os.path.join(structure_folder, temp_name)
+                            
+                            final_name = temp_name
+                            save_path = temp_path
+                            seen_filenames.add(final_name)
 
                     # Save file
                     with open(save_path, "wb") as f:
@@ -916,16 +950,26 @@ class Core:
                         except Exception as cb_err:
                             logger.error(f"⚠️ Callback error for {final_name}: {cb_err}")
 
+        if parallel and len(metadata_list) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                executor.map(download_item, metadata_list)
+        else:
+            for item in metadata_list:
+                download_item(item)
+
         # ✅ Save updated metadata.json
         Core.save_metadata(metadata_list, structure_folder)
         return True
 
+    @staticmethod
     def download_block_diagrams_files(
         structure_data,
         structure_folder="documentation",
         max_retries=3,
         retry_delay=2,
-        rename_by_detected_type=False
+        rename_by_detected_type=False,
+        parallel=False,
+        max_workers=5
     ):
         REQUIRED_KEYS = ["language", "description", "version", "date"]
 
@@ -942,8 +986,9 @@ class Core:
 
         os.makedirs(structure_folder, exist_ok=True)
         seen_filenames = set()
+        lock = threading.Lock()
 
-        for item in metadata_list:
+        def download_item(item):
             name = item.get("name")
             url = item.get("url")
 
@@ -953,20 +998,20 @@ class Core:
 
             if not name or not url:
                 logger.warning(f"⚠️ Skipping entry with missing name or url: {item}")
-                continue
+                return
 
             base_name, orig_ext = os.path.splitext(name)
             final_name = name
-            save_path = os.path.join(structure_folder, final_name)
-
-            # 👇 Rename using (1), (2), (3)... if file already exists
-            counter = 1
-            while os.path.exists(save_path) or final_name in seen_filenames:
-                final_name = f"{base_name}({counter}){orig_ext}"
+            
+            with lock:
                 save_path = os.path.join(structure_folder, final_name)
-                counter += 1
-
-            seen_filenames.add(final_name)
+                # 👇 Rename using (1), (2), (3)... if file already exists
+                counter = 1
+                while os.path.exists(save_path) or final_name in seen_filenames:
+                    final_name = f"{base_name}({counter}){orig_ext}"
+                    save_path = os.path.join(structure_folder, final_name)
+                    counter += 1
+                seen_filenames.add(final_name)
 
             # Retry loop
             attempt = 0
@@ -986,16 +1031,21 @@ class Core:
                     kind = filetype.guess(file_content)
                     detected_ext = f".{kind.extension}" if kind else orig_ext.lower()
 
-                    # Optional renaming based on detected type
-                    if rename_by_detected_type and detected_ext != orig_ext.lower():
-                        base_name_no_ext, _ = os.path.splitext(final_name)
-                        counter = 1
-                        final_name = f"{base_name_no_ext}({counter}){detected_ext}"
-                        save_path = os.path.join(structure_folder, final_name)
-                        while os.path.exists(save_path):
-                            counter += 1
-                            final_name = f"{base_name_no_ext}({counter}){detected_ext}"
-                            save_path = os.path.join(structure_folder, final_name)
+                    with lock:
+                        # Optional renaming based on detected type
+                        if rename_by_detected_type and detected_ext != orig_ext.lower():
+                            base_name_no_ext, _ = os.path.splitext(final_name)
+                            seen_filenames.discard(final_name)
+                            counter = 1
+                            temp_name = f"{base_name_no_ext}({counter}){detected_ext}"
+                            temp_path = os.path.join(structure_folder, temp_name)
+                            while os.path.exists(temp_path) or temp_name in seen_filenames:
+                                counter += 1
+                                temp_name = f"{base_name_no_ext}({counter}){detected_ext}"
+                                temp_path = os.path.join(structure_folder, temp_name)
+                            final_name = temp_name
+                            save_path = temp_path
+                            seen_filenames.add(final_name)
 
                     # Save file
                     with open(save_path, "wb") as f:
@@ -1017,7 +1067,7 @@ class Core:
                         time.sleep(retry_delay)
                     else:
                         logger.error(f"🚫 Giving up after {max_retries} attempts for {final_name}")
-                        status = getattr(response, "status_code", None)
+                        status = getattr(response, "status_code", None) if 'response' in locals() else None
                         if status:
                             item["file_path"] = f"Failed to download : {status}"
                         else:
@@ -1033,34 +1083,57 @@ class Core:
                         except Exception as cb_err:
                             logger.error(f"⚠️ Callback error for {final_name}: {cb_err}")
 
+        if parallel and len(metadata_list) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                executor.map(download_item, metadata_list)
+        else:
+            for item in metadata_list:
+                download_item(item)
+
         # ✅ Save metadata JSON file only if not empty
         if metadata_list:
             Core.save_metadata(metadata_list, structure_folder, "block_diagram_mappings.json")
         return True
 
+    @staticmethod
     def get_filename_from_response(response):
-        cd = response.headers.get("Content-Disposition", "")
-        if not cd:
+        if not response:
             return None
+        
+        # 1. Content-Disposition
+        # Example: 'attachment; filename="datasheet.pdf"'
+        cd = response.headers.get('Content-Disposition')
+        if cd:
+            import re
+            fname = re.findall("filename=(.+)", cd)
+            if len(fname) > 0:
+                return fname[0].strip('"')
 
-        m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd)
-        if m:
-            return m.group(1).strip()
+        # 2. Extract from URL
+        # Example: https://example.com/files/manual_v1.pdf?token=123
+        from urllib.parse import urlparse
+        parsed = urlparse(response.url)
+        path = parsed.path
+        if path:
+            return path.split('/')[-1]
 
         return None
 
+    @staticmethod
     def download_general_files(
         structure_data,
         structure_folder="documentation",
         max_retries=3,
         retry_delay=2,
-        rename_by_detected_type=False
+        rename_by_detected_type=False,
+        parallel=False,
+        max_workers=5
     ):
         REQUIRED_KEYS = ["language", "description", "version", "date"]
 
         if not structure_data or "metadata" not in structure_data:
             logger.warning(f"Missing '{structure_folder}.metadata' in input data.")
-            return 
+            return
 
         metadata_list = structure_data["metadata"]
         on_file_downloaded = structure_data.get("callback", None)
@@ -1071,8 +1144,9 @@ class Core:
 
         os.makedirs(structure_folder, exist_ok=True)
         seen_filenames = set()
+        lock = threading.Lock()
 
-        for item in metadata_list:
+        def download_item(item):
             name = item.get("name")
             url = item.get("url")
 
@@ -1082,20 +1156,20 @@ class Core:
 
             if not name or not url:
                 logger.warning(f"⚠️ Skipping entry with missing name or url: {item}")
-                continue
+                return
 
             base_name, orig_ext = os.path.splitext(name)
             final_name = name
-            save_path = os.path.join(structure_folder, final_name)
-
-            # ✅ Handle duplicates with (1), (2), etc.
-            counter = 1
-            while os.path.exists(save_path) or final_name in seen_filenames:
-                final_name = f"{base_name}({counter}){orig_ext}"
+            
+            with lock:
                 save_path = os.path.join(structure_folder, final_name)
-                counter += 1
-
-            seen_filenames.add(final_name)
+                # ✅ Handle duplicates with (1), (2), etc.
+                counter = 1
+                while os.path.exists(save_path) or final_name in seen_filenames:
+                    final_name = f"{base_name}({counter}){orig_ext}"
+                    save_path = os.path.join(structure_folder, final_name)
+                    counter += 1
+                seen_filenames.add(final_name)
 
             # Retry loop
             attempt = 0
@@ -1105,8 +1179,6 @@ class Core:
                 try:
                     logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
                     response = Core.get_requests(url, retries=max_retries, stream=True)
-                    response.raise_for_status()
-                    file_content = response.content
 
                     if not response or response.status_code != 200:
                         raise Exception("Failed to download file")
@@ -1119,28 +1191,38 @@ class Core:
 
                     # 🔹 Prefer server-provided filename
                     server_filename = Core.get_filename_from_response(response)
-                    if server_filename:
-                        final_name = server_filename
-                        base_name, orig_ext = os.path.splitext(final_name)
-                        save_path = os.path.join(structure_folder, final_name)
-
-                    if len(file_content) == 0:
-                        raise Exception("Empty file content")
-
-                    # Detect file type
-                    kind = filetype.guess(file_content)
-                    detected_ext = f".{kind.extension}" if kind else orig_ext.lower()
-
-                    # Optional renaming based on detected file type
-                    if rename_by_detected_type and detected_ext != orig_ext.lower():
-                        base_name_no_ext, _ = os.path.splitext(final_name)
-                        final_name = f"{base_name_no_ext}{detected_ext}"
-                        save_path = os.path.join(structure_folder, final_name)
-                        counter = 1
-                        while os.path.exists(save_path):
-                            final_name = f"{base_name_no_ext}({counter}){detected_ext}"
+                    
+                    with lock:
+                        if server_filename:
+                            seen_filenames.discard(final_name)
+                            final_name = server_filename
+                            base_name, orig_ext = os.path.splitext(final_name)
                             save_path = os.path.join(structure_folder, final_name)
-                            counter += 1
+                            while os.path.exists(save_path) or final_name in seen_filenames:
+                                counter = 1
+                                final_name = f"{base_name}({counter}){orig_ext}"
+                                save_path = os.path.join(structure_folder, final_name)
+                                counter += 1
+                            seen_filenames.add(final_name)
+
+                        # Detect file type
+                        kind = filetype.guess(file_content)
+                        detected_ext = f".{kind.extension}" if kind else orig_ext.lower()
+
+                        # Optional renaming based on detected file type
+                        if rename_by_detected_type and detected_ext != orig_ext.lower():
+                            base_name_no_ext, _ = os.path.splitext(final_name)
+                            seen_filenames.discard(final_name)
+                            temp_name = f"{base_name_no_ext}{detected_ext}"
+                            temp_path = os.path.join(structure_folder, temp_name)
+                            counter = 1
+                            while os.path.exists(temp_path) or temp_name in seen_filenames:
+                                temp_name = f"{base_name_no_ext}({counter}){detected_ext}"
+                                temp_path = os.path.join(structure_folder, temp_name)
+                                counter += 1
+                            final_name = temp_name
+                            save_path = temp_path
+                            seen_filenames.add(final_name)
 
                     # Save file
                     with open(save_path, "wb") as f:
@@ -1162,7 +1244,7 @@ class Core:
                         time.sleep(retry_delay)
                     else:
                         logger.error(f"🚫 Giving up after {max_retries} attempts for {final_name}")
-                        status = getattr(response, "status_code", None)
+                        status = getattr(response, "status_code", None) if 'response' in locals() else None
                         if status:
                             item["file_path"] = f"Failed to download : {status}"
                         else:
@@ -1176,6 +1258,13 @@ class Core:
                                 item.update(updated_item)
                         except Exception as cb_err:
                             logger.error(f"⚠️ Callback error for {final_name}: {cb_err}")
+
+        if parallel and len(metadata_list) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                executor.map(download_item, metadata_list)
+        else:
+            for item in metadata_list:
+                download_item(item)
 
         # ✅ Save metadata.json with updated names and file paths
         Core.save_metadata(metadata_list, structure_folder)
@@ -1233,6 +1322,7 @@ class Core:
         logger.info(f"✅ Metadata saved at: {save_path}")
         return save_path
 
+    @staticmethod
     def prepare_products_table(structure_data, structure_folder="tables", filename="products.json"):
         if not structure_data or "products" not in structure_data:
             logger.warning(f"Missing '{structure_folder}.products' in input data.")
@@ -1303,6 +1393,7 @@ class Core:
             logger.error(f"❌ Failed to save products.json: {e}")
             return False
 
+    @staticmethod
     def write_overview_markdown(soup, div_selector, section_title=None, url=None):
         div = soup.select_one(div_selector)
         if not div:
@@ -1366,6 +1457,7 @@ class Core:
         return section_header + markdown_text.strip() + "\n"
 
 
+    @staticmethod
     def _html_to_str(html):
         if not html:
             return ""
@@ -1375,6 +1467,7 @@ class Core:
             return str(html)
         return str(html)
 
+    @staticmethod
     def clean_html_spaces(text: str, full_clean = False) -> str:
         if not text:
             return ""
@@ -1382,6 +1475,7 @@ class Core:
         text = text.replace("&nbsp;", " ").replace("\xa0", " ").replace("\u00a0", " ")   # extra safety
         return text if not full_clean else re.sub(r"\s+", " ", text).strip()
 
+    @staticmethod
     def fix_lazy_loaded_images(soup):
         """Replace lazy-loaded placeholder src with real image URLs."""
         for img in soup.find_all("img"):
@@ -1439,7 +1533,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Array-driven scraper")
     parser.add_argument("--url", required=True, help="URL or local HTML file path to scrape")
     parser.add_argument("--out", required=True, help="Output directory")
-    parser.add_argument("--update-only-prices",action="store_true",help="Only update prices")
+    parser.add_argument("--update-only-prices", action="store_true", help="Only update prices")
+    parser.add_argument("--parallel", action="store_true", help="Enable parallel processing for downloads")
+    parser.add_argument("--max-workers", type=int, default=5, help="Maximum number of parallel workers")
     args = parser.parse_args()
 
     crawl_array = init(args.url, args.update_only_prices)
@@ -1447,5 +1543,5 @@ if __name__ == "__main__":
     if not crawl_array:
         logger.error("data extraction failed.")
     else:
-        Core.init(args.out, crawl_array, args.update_only_prices)
+        Core.init(args.out, crawl_array, args.update_only_prices, parallel=args.parallel, max_workers=args.max_workers)
         logger.info("Done")

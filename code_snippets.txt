@@ -1,0 +1,144 @@
+CODE SNIPPETS: TEMPLATE VS. ACACIA SCRAPER
+===========================================
+
+Here are the side-by-side snippets showing exactly how the code was "translated"
+from the standard template to the Acacia-specific version.
+
+1. THE MAP (SITE_CONFIG)
+------------------------
+
+[TEMPLATE - BEFORE]
+33: SITE_CONFIG = {
+    "category": {
+        "main_selector": ".category-list",
+        "markdown": [".category-list"],
+    },
+    "group": {
+        "main_selector": ".search-product-list",
+        "product_container": ".product-list-item",
+        "products": {
+            "name": ".product-title span",
+            "sku": ".product-number span",
+        }
+    }
+}
+
+[ACACIA - AFTER]
+33: SITE_CONFIG = {
+    # PART 1: Why we "broke" the category detection
+    "category": {
+        # We used ".category-list" here because it DOES NOT exist on Acacia.
+        # Why? If this matched, the script would think it's a "Text-Only" page
+        # and would NOT look for products. By making this fail, Python moves
+        # to the 'group' section below where it finds both text AND products.
+        "main_selector": ".category-list", 
+        "markdown": [".category-list"], # Inherited from template, but won't be used
+    },
+    
+    # PART 2: The real logic for Acacia's listing pages
+    "group": {
+        "main_selector": ".split-products", # This is the unique box on Acacia's list pages
+        "product_container": ".row.grid-autofit > div", # The grid that holds all product cards
+        "products": {
+            "name": ".aside h3", # The product name inside the side text area
+            "sku": "",  # Left blank because we extract it from the URL later in the code
+            "product_page_link": "a.btn.btn-gray::attr(href)", # The 'View' button link
+            "description": ".aside p" # The short summary text next to the image
+        },
+        "markdown": [".split-products"] # We put the markdown here so we get text + products!
+    }
+}
+
+
+2. PRODUCT LISTING (GROUP.TABLES)
+---------------------------------
+
+[TEMPLATE - BEFORE (Pagination loop)]
+169: while True:
+170:     page_url = url + f"?PageNumber={page_num}&PageSize=100"
+171:     if page_url in visited: break
+172:     # ... fetches and loops pages ...
+
+[ACACIA - AFTER (Single page + fallbacks)]
+196: def tables(soup, url):
+197:     """Extract product listing from a single category page (no pagination)."""
+218:     cards = soup.select(container)
+219:     if cards:
+220:         for div in cards:
+221:             # ... extracts specific card data ...
+261:     else:
+262:         # Fallback: find any link that looks like a product
+263:         for a in soup.select("a.btn[href*='/product/']"):
+264:             # ... extracts link text and slug ...
+
+
+3. PRODUCT DETAIL (PRODUCT.TABLES)
+----------------------------------
+
+[TEMPLATE - BEFORE (Generic loop)]
+298: accordion = soup.select_one("#accordion")
+299: if accordion:
+300:     panels = accordion.select(".panel-heading a")
+301:     for panel in panels:
+302:         # ... generic spec extraction ...
+
+[ACACIA - AFTER (Specific feature/resource extraction)]
+361: # Features: h3 titles + following p body
+362: features = []
+363: for container in soup.select(".show-animate"):
+364:     for h3 in container.select("h3"):
+365:         title = h3.get_text(strip=True)
+366:         sibling = h3.find_next_sibling("p")
+367:         # ... formats as title: body ...
+388: # Related Resources and PDF links
+395: for a in soup.select(".articles-list2 .box, .articles-list2 a"):
+396:     # ... extracts link and name ...
+
+
+4. LAZY LOADING FIX
+-------------------
+
+[TEMPLATE - BEFORE (Simple src)]
+1367: def fix_lazy_loaded_images(soup):
+1368:     for img in soup.find_all("img"):
+1369:         src = img.get("src", "")
+1370:         # ... only handles basic data-amsrc ...
+
+[ACACIA - AFTER (Looking for data-src)]
+1367: def fix_lazy_loaded_images(soup):
+1368:     for img in soup.find_all("img"):
+1369:         src = img.get("src", "")
+1370:         # Check for common lazy-load attributes
+1371:         real_src = img.get("data-src") or img.get("data-lazy-src") or img.get("data-amsrc")
+1372:         if real_src and (src.startswith("data:image") or not src):
+1373:             img["src"] = real_src
+1374:     return soup
+
+5. PARALLEL PROCESSING (THREADPOOLEXECUTOR)
+-----------------------------------------
+
+[ACACIA - AFTER]
+800: @staticmethod
+801: def download_images_files(structure_data, ..., parallel=False, max_workers=5):
+815:     if parallel:
+816:         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+817:             executor.map(download_single_image, structure_data.get("metadata", []))
+818:     else:
+819:         for item in structure_data.get("metadata", []):
+820:             download_single_image(item)
+
+6. UNIT TESTING (PYTEST + MOCKS)
+-------------------------------
+
+[ACACIA - AFTER]
+34: def test_product_tables_extraction(product_soup):
+35:     # Verifying that our extraction logic works on a known HTML sample
+36:     tables = Product.tables(product_soup, "https://acacia-inc.com/product/ac1200/")
+37:     assert "products" in tables
+38:     product = tables["products"][0]
+39:     assert product["name"] == "AC1200 Coherent Module"
+
+50: def test_parallel_logic_mock():
+51:     # Mocking concurrent.futures to ensure parallelism is triggered
+59:     with patch('concurrent.futures.ThreadPoolExecutor') as mock_executor:
+72:         assert mock_executor.called

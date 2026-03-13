@@ -1,0 +1,200 @@
+Acacia Inc Web Scraper – Implementation Plan
+==============================================
+
+TARGET SITE
+-----------
+  Site:             https://acacia-inc.com
+  Category URL:     https://acacia-inc.com/product-category/performance-optimized-modules/
+  Part URL:         https://acacia-inc.com/product/ac1200/
+  Category Command: python3 crawl.py --url "https://acacia-inc.com/product-category/performance-optimized-modules/" --out output/category
+  Part Command:     python3 crawl.py --url "https://acacia-inc.com/product/ac1200/" --out output/part
+
+EXISTING WORK
+-------------
+  File: data-scraping/acacia-inc.com/products/crawl.py (~1397 lines)
+  - Already forked from common/products/crawl.py
+  - SITE_CONFIG selectors already partially configured for acacia-inc.com
+  - Category: main_selector = ".split-products"
+  - Group:    main_selector = ".split-products", product_container = ".split-products .aside > div"
+  - Part:     main_selector = "main.content-main"
+  - Product.tables() already customized for acacia DOM (h1, h2, .show-animate, .articles-list2, .figure img)
+  - requirements.txt in place
+
+
+WHAT NEEDS TO BE DONE
+---------------------
+
+STEP 1: Verify/Fix SITE_CONFIG Selectors
+  [ ] Open https://acacia-inc.com/product-category/performance-optimized-modules/ in browser
+  [ ] Confirm ".split-products" exists as the category page identifier
+  [ ] Confirm product cards are at ".split-products .aside > div"
+  [ ] Open https://acacia-inc.com/product/ac1200/ in browser
+  [ ] Confirm "main.content-main" exists as the product page identifier
+  [ ] Confirm ".figure img" and ".top-split img" find the product images
+  [ ] Confirm PDF links are found by "a[href$='.pdf']"
+  [ ] Confirm h1 has the product name, h2 has the description
+  [ ] Confirm .show-animate h3 has feature titles
+  [ ] Fix any selectors that don't match
+
+STEP 2: Test Category Page Extraction
+  [ ] Run: python3 crawl.py --url "https://acacia-inc.com/product-category/performance-optimized-modules/" --out output/category
+  [ ] Verify output/category/tables/products.json has product entries
+  [ ] Verify output/category/tables/metadata.json exists
+  [ ] Verify output/category/markdowns/overview.md has meaningful content
+
+STEP 3: Test Product Page Extraction
+  [ ] Run: python3 crawl.py --url "https://acacia-inc.com/product/ac1200/" --out output/part
+  [ ] Verify output/part/ has all 9 subdirectories:
+        documentation/, images/, block_diagrams/, design_resources/,
+        software_tools/, tables/, markdowns/, trainings/, other/
+  [ ] Verify output/part/tables/products.json has product data keyed by SKU
+  [ ] Verify output/part/markdowns/overview.md has converted content
+  [ ] Verify output/part/images/ has product.jpeg (first image renamed)
+  [ ] Verify output/part/images/metadata.json lists images
+  [ ] Verify output/part/documentation/ has downloaded PDFs
+  [ ] Verify output/part/documentation/metadata.json lists PDFs
+  [ ] Verify every folder with files has metadata.json
+
+STEP 4: Fix Issues Found in Testing
+  [ ] Fix any broken selectors
+  [ ] Fix any missing/incorrect data in products.json
+  [ ] Fix any download failures (images, PDFs)
+  [ ] Handle edge cases (missing elements, empty fields)
+
+STEP 5: Page Type Detection Verification
+  [ ] Confirm category page is detected as "category" or "group" (not "product")
+  [ ] Confirm product page is detected as "product" (not "category")
+  [ ] Detection must work based on HTML structure (CSS selectors), NOT URL patterns
+  [ ] Test with other category pages on acacia-inc.com
+  [ ] Test with other product pages on acacia-inc.com
+
+STEP 6: Write README.md
+  [ ] Project description
+  [ ] Setup instructions:
+        pip install -r requirements.txt
+  [ ] Usage examples:
+        python3 crawl.py --url "<CATEGORY_URL>" --out output/category
+        python3 crawl.py --url "<PRODUCT_URL>" --out output/part
+  [ ] Output structure documentation
+  [ ] Requirements listed
+
+STEP 7: Final Verification
+  [ ] products.json format matches spec (keyed by product name)
+  [ ] metadata.json format matches spec (array of file objects)
+  [ ] overview.md contains text + tables + images from page
+  [ ] First image saved as product.jpeg
+  [ ] All folders with files have metadata.json
+  [ ] Error handling works (bad URL, 404, timeout)
+  [ ] Logging output is clean and informative
+
+
+CURRENT SITE_CONFIG (already in crawl.py)
+-----------------------------------------
+
+  category:
+    main_selector:    ".split-products"
+    markdown:         [".split-products"]
+
+  group:
+    main_selector:    ".split-products"
+    product_container: ".split-products .aside > div"
+    products.name:     "p, h3"
+    products.product_page_link: "a.btn::attr(href)"
+    products.image_url: "img::attr(src)"
+
+  part:
+    main_selector:    "main.content-main"
+    markdown:         ["main.content-main"]
+    images:           [".figure img", ".top-split img"]
+    documentation:    ["a[href$='.pdf']"]
+    products.name:    "h1"
+    products.sku:     "h1"
+    products.image_url: ".figure img::attr(src)"
+    products.description: "h2"
+    products.features: ".show-animate h3"
+
+
+BONUS FEATURES (status)
+------------------------
+  DONE  Logging                → logging module with timestamps
+  DONE  Retry mechanisms       → exponential backoff + Zyte API fallback
+  DONE  Clean project structure → Category, Group, Product, Core classes
+  DONE  File type detection    → filetype library for image/PDF detection
+  DONE  PDF metadata extraction → PyPDF2 reads version/date/language from PDFs
+  DONE  Parallel processing    → concurrent.futures for image downloads
+  DONE  Unit tests             → test selector extraction + output format
+
+
+WALKTHROUGH
+===========
+
+Changes Made (aligned with example-output format)
+--------------------------------------------------
+
+SITE_CONFIG Selectors:
+  Category:
+    main_selector     → ".category-list" (no-match → falls to group detection)
+
+  Group:
+    main_selector     → ".split-products"
+    product_container → ".row.grid-autofit > div"
+    name              → ".aside h3"
+    image_url         → ".figure img::attr(src)"
+    product_page_link → "a.btn.btn-gray::attr(href)"
+    description       → ".aside p"
+
+  Part:
+    main_selector     → "main.content-main"
+    images            → [".figure img", ".top-split img"]
+    documentation     → ["a[href$='.pdf']"]
+    name              → "h1"
+    sku               → "h1"
+    image_url         → ".figure img::attr(src)"
+    description       → "h2"
+    features          → ".show-animate h3"
+
+Key Code Changes:
+  1. Group.tables()            → Rewrote to single-page extraction (removed infinite pagination loop),
+                                  with fallback via a.btn links
+  2. Product.tables()          → Extracts name (h1), description (h2), features (.show-animate h3+p),
+                                  resources (.articles-list2 .box), SKU from URL slug
+  3. Product.images()          → Checks data-src/data-lazy-src first, skips data:image base64 placeholders
+  4. fix_lazy_loaded_images()  → Updated to handle data-src
+
+Test Results
+------------
+
+Category Command:
+  python3 crawl.py --url "https://acacia-inc.com/product-category/performance-optimized-modules/" --out output/category
+
+  ✅ products.json (dict keyed by SKU):
+     COHERENT-INTERCONNECT-MODULE-8:
+       name: "CIM 8"
+       Description: "Deliver Terabit Era capacity and reliability"
+       product_page_link: "https://acacia-inc.com/product/coherent-interconnect-module-8/"
+       image_url: "https://acacia-inc.com/wp-content/uploads/2024/04/product-09.png"
+
+     AC1200:
+       name: "AC1200"
+       Description: "Address increasing bandwidth demand"
+       product_page_link: "https://acacia-inc.com/product/ac1200/"
+       image_url: "https://acacia-inc.com/wp-content/uploads/2024/04/product-10.png"
+
+  ✅ overview.md created with markdown content
+
+Part Command:
+  python3 crawl.py --url "https://acacia-inc.com/product/ac1200/" --out output/part
+
+  ✅ 9 subdirectories: documentation/, images/, block_diagrams/, design_resources/,
+                       software_tools/, tables/, markdowns/, trainings/, other/
+  ✅ product.png — first image renamed
+  ✅ images/metadata.json — lists all downloaded images with URLs and file_paths
+  ✅ products.json — AC1200 with name, Description, Features, Related Resources
+
+Git Commits
+-----------
+  a3b9a95  acacia-inc.com: initial commit
+  6ce509f  acacia-inc.com: configure SITE_CONFIG selectors, rewrite Product/Group extraction, add README
+  7409c7b  acacia-inc.com: fix category product extraction selectors and add description field
+
+  All pushed to origin/acacia-inc.com branch.

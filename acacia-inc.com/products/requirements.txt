@@ -5,3 +5,5 @@ PyPDF2>=3.0.1
 filetype>=1.2.0
 curl-cffi>=0.6.2
 jsonschema>=4.23.0
+pytest>=8.0.0
+pytest-mock>=3.12.0

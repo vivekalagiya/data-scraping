@@ -16,6 +16,8 @@ pip install -r requirements.txt
 - `markdownify` – HTML to Markdown conversion
 - `filetype` – File type detection
 - `PyPDF2` – PDF metadata extraction
+- `pytest` – Testing framework
+- `pytest-mock` – Mocking for tests
 
 ## Usage
 
@@ -33,6 +35,8 @@ python3 crawl.py --url "https://acacia-inc.com/product/ac1200/" --out output/par
 | `--url`  | Yes      | URL of the page to scrape (category or product) |
 | `--out`  | Yes      | Output directory path |
 | `--update-only-prices` | No | Only update pricing data |
+| `--parallel` | No | Enable parallel processing for downloads |
+| `--max-workers` | No | Maximum number of concurrent workers (default: 5) |
 
 ## Output Structure
 
@@ -106,3 +110,14 @@ output/part/
 - Zyte API fallback for bot-protected pages
 - Graceful handling of missing elements and empty fields
 - Clean logging with timestamps and status indicators
+
+## Testing
+
+Run unit tests using:
+```bash
+python -m pytest tests/test_crawl.py
+```
+The tests verify:
+- Data extraction logic for products.
+- Image extraction from lazy-loaded attributes.
+- Parallel processing behavior using mocks.
