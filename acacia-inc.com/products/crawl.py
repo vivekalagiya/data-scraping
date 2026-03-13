@@ -52,27 +52,22 @@ SITE_CONFIG = {
     # containing an image, a text label, and an "a.btn.btn-gray" link.
     # -----------------------------------------------------------------------
     "group": {
-        # Detected by presence of .split-products .btn-gray on the page
+        # Detected by presence of .split-products on the page
         "main_selector": ".split-products",
-        # Each individual product item in the sidebar list
-        "product_container": ".split-products .aside > div",
-        # Markdown overview from the hero/intro block
+        # Each product card is a direct child div of .row.grid-autofit
+        # Structure: div > .figure (image) + .aside (h3 name + p desc + a.btn link)
+        "product_container": ".row.grid-autofit > div",
         "markdown": [".split-products"],
         "documentation": [],
         "products": {
-            # Product name / label – the text node or heading near the image
-            "name": "p, h3",
-            # Acacia category pages don't expose a separate SKU – use slug from link
+            "name": ".aside h3",
             "sku": "",
-            # Link to the full product detail page
-            "product_page_link": "a.btn::attr(href)",
+            "product_page_link": "a.btn.btn-gray::attr(href)",
             "pdf_link": "",
             "pdf_filename": "",
-            # Product thumbnail image
-            "image_url": "img::attr(src)",
-            # No pricing on marketing category pages
+            "image_url": ".figure img::attr(src)",
             "pricing": "",
-            "description": ""
+            "description": ".aside p"
         }
     },
 
@@ -248,9 +243,12 @@ class Group:
                 pdflink = extract_value(div, SITE_CONFIG["group"]["products"]["pdf_link"])
                 pdfname = pdflink.split("/")[-1] if pdflink else None
 
+                desc = extract_value(div, SITE_CONFIG["group"]["products"].get("description", ""))
+
                 product = {
                     "Product": sku or name or None,
                     "name": name or None,
+                    "Description": desc or None,
                     "product_page_link": prod_url or None,
                     "pdf_link": pdflink,
                     "pdf_filename": pdfname,
