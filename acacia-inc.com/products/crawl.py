@@ -31,47 +31,88 @@ ZYTE_API_KEY = os.getenv("ZYTE_API_KEY")  # set this in your environment
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 SITE_CONFIG = {
+    # -----------------------------------------------------------------------
+    # acacia-inc.com – Product Category / listing page
+    # URL pattern: /product-category/<slug>/
+    # Layout: A .split-products section with a sidebar listing product names
+    # + images + a "View" button (a.btn.btn-gray) linking to each product page.
+    # -----------------------------------------------------------------------
     "category": {
+        # Acacia does not have a pure "category" page without product listings.
+        # Use a selector that will NOT match, so category pages fall through
+        # to "group" detection which extracts product tables + markdowns.
         "main_selector": ".category-list",
         "markdown": [".category-list"],
         "documentation": [],
     },
 
+    # -----------------------------------------------------------------------
+    # acacia-inc.com – Group / Category listing (product list)
+    # Each product card is a <div> inside the .split-products sidebar,
+    # containing an image, a text label, and an "a.btn.btn-gray" link.
+    # -----------------------------------------------------------------------
     "group": {
-        "main_selector": ".search-product-list",
-        "product_container": ".product-list-item",
-        "markdown": ["#family-page h1"],
+        # Detected by presence of .split-products .btn-gray on the page
+        "main_selector": ".split-products",
+        # Each individual product item in the sidebar list
+        "product_container": ".split-products .aside > div",
+        # Markdown overview from the hero/intro block
+        "markdown": [".split-products"],
         "documentation": [],
         "products": {
-            "name": ".product-title span",
-            "sku": ".product-number span",
-            "product_page_link": "a.product-title::attr(href)",
+            # Product name / label – the text node or heading near the image
+            "name": "p, h3",
+            # Acacia category pages don't expose a separate SKU – use slug from link
+            "sku": "",
+            # Link to the full product detail page
+            "product_page_link": "a.btn::attr(href)",
             "pdf_link": "",
             "pdf_filename": "",
+            # Product thumbnail image
             "image_url": "img::attr(src)",
-            "pricing": ".current-price div",
+            # No pricing on marketing category pages
+            "pricing": "",
             "description": ""
         }
     },
 
+    # -----------------------------------------------------------------------
+    # acacia-inc.com – Product detail page
+    # URL pattern: /product/<slug>/
+    # Layout: main.content-main with:
+    #   - h1  → product family name (used as "Product" key)
+    #   - h2  → subtitle / extended name
+    #   - h3+p blocks → features
+    #   - .articles-list2 .box → related resources / documentation links
+    #   - .figure img  → product showcase image
+    # -----------------------------------------------------------------------
     "part": {
-        "main_selector": ".product-details",
-        "markdown": [".product-details", ".marketing-area > div"],
-        "images": [".product-image-countainer .product-image-container img"],
-        "documentation": ["#accordion a[href]"],
+        # Detected by presence of main.content-main on the page
+        "main_selector": "main.content-main",
+        # Markdown from the main content and the feature section
+        "markdown": ["main.content-main"],
+        # Product images
+        "images": [".figure img", ".top-split img"],
+        # Documentation: any PDF links anywhere on the page
+        "documentation": ["a[href$='.pdf']"],
         "block_diagrams": [],
         "design_resources": [],
         "software_tools": [],
         "products": {
-            "name": ".product-description",
+            # h1 contains the product family name, e.g. "AC1200 Product Family"
+            "name": "h1",
+            # Acacia product pages don't carry a separate part-number element;
+            # the slug extracted from the URL is used as the SKU fallback.
             "sku": "h1",
             "product_page_link": "",
             "pdf_link": "",
             "pdf_filename": "",
-            "image_url": ".product-image-countainer .product-image-container img::attr(src)",
-            "pricing": ".current-price div",
-            "description": "",
-            "features": "",
+            # Main showcase image in the hero split section
+            "image_url": ".figure img::attr(src)",
+            # No public pricing on acacia-inc.com
+            "pricing": "",
+            "description": "h2",
+            "features": ".show-animate h3",
             "application": "",
             "specification": "",
             "variants": {
@@ -158,42 +199,49 @@ class Group:
         return markdown
 
     def tables(soup, url):
+        """Extract product listing from a single category page (no pagination)."""
         tables = {}
         products = []
 
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        page_num = 0
-        visited = set()
-        while True:
-            page_url = url + f"?PageNumber={page_num}&PageSize=100"
-            if page_url in visited:
-                break
-            visited.add(page_url)
+        Core.fix_lazy_loaded_images(soup)
 
-            html = Core.fetch_html(page_url, "request")
-            if not html:
-                break
-            soup = BeautifulSoup(html, "html.parser")
-            Core.fix_lazy_loaded_images(soup)
+        container = SITE_CONFIG["group"].get("product_container")
+        if not container:
+            tables["products"] = products
+            return tables
 
-            container = SITE_CONFIG["group"].get("product_container")
-            
-            if not soup.select(container):
-                break
+        # -------------------------------------------------------------------
+        # Acacia category pages list all products on a single page.
+        # Each product card is a div inside .split-products .aside with an
+        # image, a text label, and an a.btn link to the detail page.
+        # -------------------------------------------------------------------
+        # Fallback: if the configured container doesn't match, try
+        # collecting any anchor that links to /product/ paths.
+        cards = soup.select(container)
 
-            for div in soup.select(container):
+        if cards:
+            for div in cards:
                 prod_url = extract_value(div, SITE_CONFIG["group"]["products"]["product_page_link"])
                 if prod_url and not prod_url.startswith("http"):
                     prod_url = urljoin(base_url, prod_url)
-                sku = extract_value(div, SITE_CONFIG["group"]["products"]["sku"])
 
                 name = extract_value(div, SITE_CONFIG["group"]["products"]["name"])
+
+                # Derive SKU from product URL slug if no explicit SKU element
+                sku = extract_value(div, SITE_CONFIG["group"]["products"]["sku"])
+                if not sku and prod_url:
+                    slug_parts = [p for p in urlparse(prod_url).path.strip("/").split("/") if p]
+                    sku = slug_parts[-1].upper() if slug_parts else None
 
                 price = extract_value(div, SITE_CONFIG["group"]["products"]["pricing"])
 
                 img_src = extract_value(div, SITE_CONFIG["group"]["products"]["image_url"])
+                # Skip data:image placeholders
+                if img_src and img_src.startswith("data:"):
+                    img_src = None
                 if img_src and not img_src.startswith("http"):
                     img_src = urljoin(base_url, img_src)
 
@@ -201,7 +249,7 @@ class Group:
                 pdfname = pdflink.split("/")[-1] if pdflink else None
 
                 product = {
-                    "Product": sku or None,
+                    "Product": sku or name or None,
                     "name": name or None,
                     "product_page_link": prod_url or None,
                     "pdf_link": pdflink,
@@ -211,10 +259,44 @@ class Group:
                 }
 
                 products.append(product)
-            page_num += 1
+        else:
+            # Fallback: find product links by href pattern
+            for a in soup.select("a.btn[href*='/product/']"):
+                href = a.get("href", "").strip()
+                if not href:
+                    continue
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
+                btn_text = a.get_text(strip=True)  # e.g. "View AC1200"
+                name = btn_text.replace("View ", "").strip() if btn_text else None
+                slug_parts = [p for p in urlparse(href).path.strip("/").split("/") if p]
+                sku = slug_parts[-1].upper() if slug_parts else None
+
+                # Try to find a nearby image
+                parent = a.parent
+                img = parent.select_one("img") if parent else None
+                img_src = None
+                if img:
+                    img_src = img.get("data-src") or img.get("src")
+                    if img_src and img_src.startswith("data:"):
+                        img_src = None
+                    if img_src and not img_src.startswith("http"):
+                        img_src = urljoin(base_url, img_src)
+
+                product = {
+                    "Product": sku or name or None,
+                    "name": name or None,
+                    "product_page_link": href,
+                    "pdf_link": None,
+                    "pdf_filename": None,
+                    "image_url": img_src,
+                    "Pricing": None,
+                }
+                products.append(product)
 
         tables["products"] = products
         return tables
+
 
     def documentation(soup):
         documents = {}
@@ -255,173 +337,103 @@ class Product:
         products = []
         product_data = {}
 
-        pull_right = soup.select_one("h1 .pull-right")
-        if pull_right:
-            pull_right.decompose()
+        parsed_url = urlparse(url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-        product_data["Product"] = extract_value(soup, SITE_CONFIG["part"]["products"]["sku"])
+        # -----------------------------------------------------------------------
+        # Product name: h1 contains the product family name
+        # -----------------------------------------------------------------------
         product_data["name"] = extract_value(soup, SITE_CONFIG["part"]["products"]["name"])
-        product_data["Pricing"] = extract_value(soup, SITE_CONFIG["part"]["products"]["pricing"])
-        product_data["image_url"] = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+
+        # -----------------------------------------------------------------------
+        # SKU: derived from URL slug (e.g. /product/ac1200/ → AC1200)
+        # -----------------------------------------------------------------------
+        slug_parts = [p for p in parsed_url.path.strip("/").split("/") if p]
+        sku_from_slug = slug_parts[-1].upper() if slug_parts else None
+        product_data["Product"] = sku_from_slug
+
+        # -----------------------------------------------------------------------
+        # Description: collect h2 subtitles
+        # -----------------------------------------------------------------------
+        h2_tags = soup.select("h2")
+        descriptions = [h.get_text(strip=True) for h in h2_tags if h.get_text(strip=True)]
+        if descriptions:
+            product_data["Description"] = descriptions[0] if len(descriptions) == 1 else descriptions
+
+        # -----------------------------------------------------------------------
+        # Features: h3 titles + following p body inside .show-animate containers
+        # -----------------------------------------------------------------------
+        features = []
+        for container in soup.select(".show-animate"):
+            for h3 in container.select("h3"):
+                title = h3.get_text(strip=True)
+                sibling = h3.find_next_sibling("p")
+                body = sibling.get_text(strip=True) if sibling else ""
+                if title:
+                    features.append(f"{title}: {body}" if body else title)
+        if features:
+            product_data["Features"] = features
+
+        # -----------------------------------------------------------------------
+        # Product image
+        # -----------------------------------------------------------------------
+        img_url = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+        if img_url:
+            if not img_url.startswith("http"):
+                img_url = urljoin(base_url, img_url)
+            if img_url.startswith("http://"):
+                img_url = img_url.replace("http://", "https://", 1)
+        product_data["image_url"] = img_url
         product_data["product_page_link"] = url
-        # PDF Links and Filenames
-        pdf_links = []
-        pdf_names = []
+        product_data["Pricing"] = None
 
-        for a in soup.select(SITE_CONFIG["part"]["products"]["pdf_link"]):
-            href = a.get("href")
-            if not href:
-                continue
-
-            pdf_url = href.strip()
-            pdf_links.append(pdf_url)
-            pdf_names.append(pdf_url.split("/")[-1])
-
-        if pdf_links:
-            if len(pdf_links) == 1:
-                product_data["pdf_link"] = pdf_links[0]
-                product_data["pdf_filename"] = pdf_names[0]
-            else:
-                product_data["pdf_link"] = pdf_links
-                product_data["pdf_filename"] = pdf_names
-
-        # -------------------------------
-        # Custom Sections
-        # -------------------------------
-        lead_time = soup.select_one("strong p")
-        if lead_time:
-            product_data["lead_time"] = lead_time.get_text(strip=True).replace("Standard Lead Time:", "").strip()
-
-
+        # -----------------------------------------------------------------------
+        # Related Resources and PDF links
+        # -----------------------------------------------------------------------
         pdf_links = []
         pdf_filenames = []
-        accordion = soup.select_one("#accordion")
-        if accordion:
-            panels = accordion.select(".panel-heading a")
-            for panel in panels:
-                section_name = panel.get_text(" ", strip=True).replace("+", "").strip()
+        resources = []
 
-                target_id = panel.get("href")
-                if not target_id:
+        for a in soup.select(".articles-list2 .box, .articles-list2 a"):
+            href = a.get("href", "").strip()
+            name = a.get_text(" ", strip=True).replace("\n", " ")
+            if not href:
+                continue
+            resources.append({"name": name, "url": href})
+            parsed_href = urlparse(href)
+            if parsed_href.path.lower().endswith(".pdf"):
+                filename = parsed_href.path.split("/")[-1]
+                pdf_links.append(href)
+                pdf_filenames.append(filename)
+
+        # Fallback: direct PDF links anywhere on the page
+        if not pdf_links:
+            for a in soup.select("a[href$='.pdf']"):
+                href = a.get("href", "").strip()
+                if not href:
                     continue
+                if not href.startswith("http"):
+                    href = urljoin(base_url, href)
+                filename = urlparse(href).path.split("/")[-1]
+                pdf_links.append(href)
+                pdf_filenames.append(filename)
 
-                target_id = panel.get("href")
-                if not target_id or not target_id.startswith("#"):
-                    continue
+        if resources:
+            product_data["Related Resources"] = resources
 
-                panel_id = target_id[1:]  # remove '#'
-
-                panel_div = accordion.find(id=panel_id)
-                if not panel_div:
-                    continue
-
-                body = panel_div.select_one(".panel-body")
-                if not body:
-                    continue
-
-                # ---------- Description (text + <br>)
-                if section_name == "Description":
-                    text = " ".join(body.stripped_strings)
-                    product_data["Description"] = text
-
-                # ---------- Specifications (table → dict)
-                elif section_name == "Specifications":
-                    specs = {}
-                    for tr in body.select("tr"):
-                        tds = tr.select("td")
-                        if len(tds) == 2:
-                            key = tds[0].get_text(strip=True).replace(":", "")
-                            value = tds[1].get_text(strip=True)
-                            specs[key] = value
-                    if specs:
-                        product_data["Specifications"] = specs
-
-                # ---------- Features & Benefits (ul → list)
-                elif section_name == "Features and Benefits":
-                    features = []
-
-                    # ---------- Case 1: Proper <li> list
-                    lis = body.select("li")
-                    if lis:
-                        for li in lis:
-                            text = " ".join(li.stripped_strings)
-                            if text:
-                                features.append(text)
-
-                    # ---------- Case 2: Broken <ul> without <li>
-                    elif body.select_one("ul"):
-                        ul_text = " ".join(body.select_one("ul").stripped_strings)
-
-                        # split on large whitespace blocks
-                        parts = [p.strip() for p in ul_text.split("  ") if p.strip()]
-                        features.extend(parts)
-
-                    # ---------- Case 3: Plain text
-                    else:
-                        text = " ".join(body.stripped_strings)
-                        if text:
-                            product_data["Features and Benefits"] = text
-                            continue
-
-                    if features:
-                        product_data["Features and Benefits"] = features if len(features) > 1 else features[0]
-
-                # ---------- Product Comprise of (ul → list)
-                elif section_name == "Product Comprise of":
-                    items = []
-                    for li in body.select("li"):
-                        text = li.get_text(strip=True)
-                        if text:
-                            items.append(text)
-                    if items:
-                        product_data["Product Comprise of"] = items
-
-                # ---------- Additional Resources (links)
-                elif section_name == "Additional Resources":
-                    resources = []
-
-                    for a in body.select("a[href]"):
-                        href = a["href"].strip()
-                        name = a.get_text(strip=True)
-
-                        # parse URL safely
-                        parsed = urlparse(href)
-                        path = parsed.path.lower()
-
-                        # only process PDFs
-                        if not path.endswith(".pdf"):
-                            continue
-
-                        filename = path.split("/")[-1]
-
-                        resources.append({
-                            "name": name,
-                            "url": href
-                        })
-
-                        # ONLY Data-Sheets go into pdf_link / pdf_filename
-                        if "data-sheet" not in name.lower():
-                            continue
-
-                        pdf_links.append(href)
-                        pdf_filenames.append(filename)
-
-                    if resources:
-                        product_data["Additional Resources"] = resources
-
-            if pdf_links:
-                if len(pdf_links) == 1:
-                    product_data["pdf_link"] = pdf_links[0]
-                    product_data["pdf_filename"] = pdf_filenames[0]
-                else:
-                    product_data["pdf_link"] = pdf_links
-                    product_data["pdf_filename"] = pdf_filenames
+        if pdf_links:
+            product_data["pdf_link"] = pdf_links[0] if len(pdf_links) == 1 else pdf_links
+            product_data["pdf_filename"] = pdf_filenames[0] if len(pdf_filenames) == 1 else pdf_filenames
+        else:
+            product_data["pdf_link"] = None
+            product_data["pdf_filename"] = None
 
         products.append(product_data)
         tables["products"] = products
         return tables
 
     def markdown(soup, url):
+
         markdown = {}
         overview = []
 
@@ -474,22 +486,36 @@ class Product:
 
         for sel in SITE_CONFIG["part"]["images"]:
             for img in soup.select(sel):
-                img_url = img.get("src")
-                if img_url and not img_url.startswith("http"):
+                # Prefer real URL from lazy-load attributes over placeholder src
+                img_url = (
+                    img.get("data-src")
+                    or img.get("data-lazy-src")
+                    or img.get("data-amsrc")
+                    or img.get("src")
+                )
+
+                if not img_url:
+                    continue
+
+                # Skip base64 inline placeholders (data:image/...)
+                if img_url.startswith("data:"):
+                    continue
+
+                if not img_url.startswith("http"):
                     img_url = urljoin(base_url, img_url)
                 if img_url.startswith("http://"):
                     img_url = img_url.replace("http://", "https://", 1)
-                if img_url:
-                    img_filename = img_url.split("/")[-1]
-                    metadata.append({
-                        "name": img_filename,
-                        "url": img_url,
-                        "file_path": "",
-                        "version": None,
-                        "date": None,
-                        "language": None,
-                        "description": None
-                    })
+
+                img_filename = img_url.split("/")[-1].split("?")[0]
+                metadata.append({
+                    "name": img_filename,
+                    "url": img_url,
+                    "file_path": "",
+                    "version": None,
+                    "date": None,
+                    "language": None,
+                    "description": img.get("alt", None)
+                })
 
         if metadata:
             images["metadata"] = metadata
@@ -1365,9 +1391,15 @@ class Core:
         return text if not full_clean else re.sub(r"\s+", " ", text).strip()
 
     def fix_lazy_loaded_images(soup):
+        """Replace lazy-loaded placeholder src with real image URLs."""
         for img in soup.find_all("img"):
             src = img.get("src", "")
-            real_src = img.get("data-amsrc")
+            # Check common lazy-load attributes used by Acacia and others
+            real_src = (
+                img.get("data-src")
+                or img.get("data-lazy-src")
+                or img.get("data-amsrc")
+            )
 
             if src.startswith("data:image") and real_src:
                 img["src"] = real_src
