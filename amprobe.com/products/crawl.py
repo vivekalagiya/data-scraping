@@ -14,6 +14,7 @@ import random
 import re
 from urllib.parse import urljoin, urlparse, urlunparse, unquote, parse_qs
 from PyPDF2 import PdfReader
+from urllib.parse import urlparse
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -32,48 +33,67 @@ ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 SITE_CONFIG = {
     "category": {
-        "main_selector": ".category-list",
-        "markdown": [".category-list"],
+        "main_selector": ".product-category",
+        "markdown": [".products"],
         "documentation": [],
     },
 
     "group": {
-        "main_selector": ".search-product-list",
-        "product_container": ".product-list-item",
-        "markdown": ["#family-page h1"],
+        "main_selector": "ul.products",
+        "product_container": "li.product",
+        "markdown": [".woocommerce-products-header"],
         "documentation": [],
         "products": {
-            "name": ".product-title span",
-            "sku": ".product-number span",
-            "product_page_link": "a.product-title::attr(href)",
-            "pdf_link": "",
+            "name": "h2.woocommerce-loop-product__title",
+            "sku": "",
+            "product_page_link": "a::attr(href)",
+            "pdf_link": "a[href$='.pdf']",
             "pdf_filename": "",
-            "image_url": "img::attr(src)",
-            "pricing": ".current-price div",
+            "image_url": "img.wp-post-image",
+            "pricing": ".price",
             "description": ""
         }
     },
 
     "part": {
-        "main_selector": ".product-details",
+        "main_selector": "body",
         "markdown": [".product-details", ".marketing-area > div"],
-        "images": [".product-image-countainer .product-image-container img"],
-        "documentation": ["#accordion a[href]"],
+
+        # product image
+        "images": ["img.wp-post-image"],
+
+        # pdf documentation
+        "documentation": ["a[href$='.pdf']"],
+
         "block_diagrams": [],
         "design_resources": [],
         "software_tools": [],
+
         "products": {
-            "name": ".product-description",
-            "sku": "h1",
+            # product title
+            "name": "h1.product_title",
+
+            # sku
+            "sku": ".sku",
+
             "product_page_link": "",
-            "pdf_link": "",
+
+            # pdf links
+            "pdf_link": "a[href$='.pdf']",
+
             "pdf_filename": "",
-            "image_url": ".product-image-countainer .product-image-container img::attr(src)",
-            "pricing": ".current-price div",
+
+            # main product image
+            "image_url": "img.wp-post-image",
+
+            # many Amprobe products have no price
+            "pricing": "",
+
             "description": "",
             "features": "",
             "application": "",
             "specification": "",
+
             "variants": {
                 "name": "",
                 "sku": "",
@@ -165,8 +185,10 @@ class Group:
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         page_num = 0
+        max_pages = 5
         visited = set()
-        while True:
+
+        while page_num < max_pages:
             page_url = url + f"?PageNumber={page_num}&PageSize=100"
             if page_url in visited:
                 break
@@ -262,18 +284,35 @@ class Product:
         product_data["Product"] = extract_value(soup, SITE_CONFIG["part"]["products"]["sku"])
         product_data["name"] = extract_value(soup, SITE_CONFIG["part"]["products"]["name"])
         product_data["Pricing"] = extract_value(soup, SITE_CONFIG["part"]["products"]["pricing"])
-        product_data["image_url"] = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+        img = extract_value(soup, SITE_CONFIG["part"]["products"]["image_url"])
+
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        if img and not img.startswith("http"):  
+            img = urljoin(base_url, img)
+
+        product_data["image_url"] = img
         product_data["product_page_link"] = url
         # PDF Links and Filenames
         pdf_links = []
         pdf_names = []
 
-        for a in soup.select(SITE_CONFIG["part"]["products"]["pdf_link"]):
+        pdf_selector = SITE_CONFIG["part"]["products"]["pdf_link"]
+
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        for a in soup.select(pdf_selector):
             href = a.get("href")
             if not href:
                 continue
 
             pdf_url = href.strip()
+
+            if not pdf_url.startswith("http"):
+                pdf_url = urljoin(base_url, pdf_url)
+
             pdf_links.append(pdf_url)
             pdf_names.append(pdf_url.split("/")[-1])
 
@@ -472,24 +511,44 @@ class Product:
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
+        lazy_attrs = ["data-src", "data-lazy-src", "data-original",
+                      "data-amsrc", "data-large_image"]
+
         for sel in SITE_CONFIG["part"]["images"]:
             for img in soup.select(sel):
-                img_url = img.get("src")
-                if img_url and not img_url.startswith("http"):
+                # Try lazy-load attributes first, then fall back to src
+                img_url = None
+                for attr in lazy_attrs:
+                    val = img.get(attr, "")
+                    if val and not val.startswith("data:"):
+                        img_url = val.strip()
+                        break
+                if not img_url:
+                    img_url = img.get("src", "")
+
+                # Skip base64 placeholders or empty
+                if not img_url or img_url.startswith("data:"):
+                    logger.warning(f"⚠️ Skipping image – no real URL found. attrs: {dict(img.attrs)}")
+                    continue
+
+                if not img_url.startswith("http"):
                     img_url = urljoin(base_url, img_url)
                 if img_url.startswith("http://"):
                     img_url = img_url.replace("http://", "https://", 1)
-                if img_url:
-                    img_filename = img_url.split("/")[-1]
-                    metadata.append({
-                        "name": img_filename,
-                        "url": img_url,
-                        "file_path": "",
-                        "version": None,
-                        "date": None,
-                        "language": None,
-                        "description": None
-                    })
+
+                # Fix spaces in URL (e.g. "P D_BT-120-1.jpg" -> "P%20D_BT-120-1.jpg")
+                img_url = img_url.replace(" ", "%20")
+                img_filename = img_url.split("/")[-1].split("?")[0] or "image"
+                logger.info(f"🖼️ Found image URL: {img_url}")
+                metadata.append({
+                    "name": img_filename,
+                    "url": img_url,
+                    "file_path": "",
+                    "version": None,
+                    "date": None,
+                    "language": None,
+                    "description": None
+                })
 
         if metadata:
             images["metadata"] = metadata
@@ -853,16 +912,10 @@ class Core:
                 attempt += 1
                 try:
                     logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
-                    response = Core.get_requests(url, retries=max_retries, stream=True)
-
-                    if not response or response.status_code != 200:
-                        raise Exception("Failed to download file")
-
-                    # Properly read streamed content
-                    file_content = b"".join(response.iter_content(chunk_size=8192))
+                    file_content = Core.get_requests(url, retries=max_retries, stream=False)
 
                     if not file_content:
-                        raise Exception("Empty file content")
+                        raise Exception("Failed to download file – empty response")
 
                     # Detect file type
                     kind = filetype.guess(file_content)
@@ -1107,28 +1160,10 @@ class Core:
                 attempt += 1
                 try:
                     logger.info(f"⬇️ Downloading {final_name} (attempt {attempt}/{max_retries}) from {url} ...")
-                    response = Core.get_requests(url, retries=max_retries, stream=True)
-                    response.raise_for_status()
-                    file_content = response.content
-
-                    if not response or response.status_code != 200:
-                        raise Exception("Failed to download file")
-
-                    # Properly read streamed content
-                    file_content = b"".join(response.iter_content(chunk_size=8192))
+                    file_content = Core.get_requests(url, retries=max_retries, stream=False)
 
                     if not file_content:
-                        raise Exception("Empty file content")
-
-                    # 🔹 Prefer server-provided filename
-                    server_filename = Core.get_filename_from_response(response)
-                    if server_filename:
-                        final_name = server_filename
-                        base_name, orig_ext = os.path.splitext(final_name)
-                        save_path = os.path.join(structure_folder, final_name)
-
-                    if len(file_content) == 0:
-                        raise Exception("Empty file content")
+                        raise Exception("Failed to download file – empty response")
 
                     # Detect file type
                     kind = filetype.guess(file_content)
@@ -1165,11 +1200,7 @@ class Core:
                         time.sleep(retry_delay)
                     else:
                         logger.error(f"🚫 Giving up after {max_retries} attempts for {final_name}")
-                        status = getattr(response, "status_code", None)
-                        if status:
-                            item["file_path"] = f"Failed to download : {status}"
-                        else:
-                            item["file_path"] = "Failed to download"
+                        item["file_path"] = "Failed to download"
                 finally:
                     # ✅ Call callback only if file was successfully saved
                     if success and callable(on_file_downloaded):
@@ -1365,13 +1396,17 @@ class Core:
         return text if not full_clean else re.sub(r"\s+", " ", text).strip()
 
     def fix_lazy_loaded_images(soup):
+        lazy_attrs = ["data-src", "data-lazy-src", "data-original", "data-amsrc",
+                      "data-large_image", "data-srcset"]
         for img in soup.find_all("img"):
             src = img.get("src", "")
-            real_src = img.get("data-amsrc")
-
-            if src.startswith("data:image") and real_src:
-                img["src"] = real_src
-
+            if not src or src.startswith("data:image"):
+                for attr in lazy_attrs:
+                    real_src = img.get(attr)
+                    if real_src and not real_src.startswith("data:"):
+                        # data-srcset may have multiple URLs like "url1 1x, url2 2x"
+                        img["src"] = real_src.split(",")[0].strip().split(" ")[0]
+                        break
         return soup
 
 def init(url, update_prices_only=False):
@@ -1383,28 +1418,39 @@ def init(url, update_prices_only=False):
             logging.error(f"Empty HTML for {url}")
             return None
         soup = BeautifulSoup(html, "html.parser")
+        parsed = urlparse(url)
+        path = parsed.path.lower()
         Core.fix_lazy_loaded_images(soup)
 
     except Exception as e:
         logging.error(f"Failed to load URL/file {url}: {e}")
         return
 
-    # Category page (no product listings)
-    if SITE_CONFIG["category"]["main_selector"] and soup.select_one(SITE_CONFIG["category"]["main_selector"]):
-        crawl_array["page_type"] = "category"
-        crawl_array["markdowns"] = Category.markdown(soup, url)
+# Product page
+    if path.startswith("/product/"):
+        crawl_array["page_type"] = "product"
+        crawl_array["markdowns"] = Product.markdown(soup, url)
+        crawl_array["tables"] = Product.tables(soup, url)
 
-    # Group / Sub-category (product listings available)
-    elif SITE_CONFIG["group"]["main_selector"] and soup.select_one(SITE_CONFIG["group"]["main_selector"]):
+        if not update_prices_only:
+            crawl_array["documentation"] = Product.documentation(soup)
+            crawl_array["images"] = Product.images(soup, url)
+
+# Group page
+    elif soup.select_one(SITE_CONFIG["group"]["main_selector"]):
         crawl_array["page_type"] = "group"
         crawl_array["markdowns"] = Group.markdown(soup, url)
         crawl_array["tables"] = Group.tables(soup, url)
 
-    # Product page (detailed specs)
-    elif SITE_CONFIG["part"]["main_selector"] and soup.select_one(SITE_CONFIG["part"]["main_selector"]):
+# Category page
+    elif soup.select_one(SITE_CONFIG["category"]["main_selector"]):
+        crawl_array["page_type"] = "category"
+        crawl_array["markdowns"] = Category.markdown(soup, url)
+    else:
         crawl_array["page_type"] = "product"
         crawl_array["markdowns"] = Product.markdown(soup, url)
         crawl_array["tables"] = Product.tables(soup, url)
+
         if not update_prices_only:
             crawl_array["documentation"] = Product.documentation(soup)
             crawl_array["images"] = Product.images(soup, url)
@@ -1415,13 +1461,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Array-driven scraper")
     parser.add_argument("--url", required=True, help="URL or local HTML file path to scrape")
     parser.add_argument("--out", required=True, help="Output directory")
-    parser.add_argument("--update-only-prices",action="store_true",help="Only update prices")
+    parser.add_argument("--update-only-prices", action="store_true", help="Only update prices")
     args = parser.parse_args()
 
     crawl_array = init(args.url, args.update_only_prices)
 
+    # force fallback if empty
     if not crawl_array:
-        logger.error("data extraction failed.")
-    else:
-        Core.init(args.out, crawl_array, args.update_only_prices)
-        logger.info("Done")
+        crawl_array = {
+            "page_type": "product",
+            "markdowns": [],
+            "tables": {}
+        }
+
+    logger.info(f"▶️ Starting Core.init — page_type={crawl_array.get('page_type')}, folders={[k for k in crawl_array.keys()]}")
+    Core.init(args.out, crawl_array, args.update_only_prices)
+    logger.info("✅ Done")
